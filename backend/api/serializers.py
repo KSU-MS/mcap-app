@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.contrib.gis.geos import Point
 from .models import McapLog, Car, Driver, EventType
 
 class McapLogSerializer(serializers.ModelSerializer):
@@ -13,6 +14,7 @@ class McapLogSerializer(serializers.ModelSerializer):
     )
     file = serializers.FileField(write_only=True, required=False, help_text="MCAP file to upload and parse")
     file_name = serializers.CharField(required=False, allow_blank=True)
+    
     
     class Meta:
         model = McapLog
@@ -29,6 +31,7 @@ class McapLogSerializer(serializers.ModelSerializer):
                   'duration_seconds',
                   'channel_count',
                   'channels',
+                  'location',
                   'car',
                   'driver',
                   'event_type',

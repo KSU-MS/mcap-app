@@ -11,9 +11,31 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# GeoDjango library paths (for macOS with Homebrew)
+# Try to find GDAL library automatically, fallback to common paths
+gdal_paths = [
+    '/opt/homebrew/lib/libgdal.dylib',  # Symlink (preferred)
+    '/opt/homebrew/lib/libgdal.37.dylib',  # Versioned
+    '/usr/local/lib/libgdal.dylib',  # Intel Mac
+]
+GDAL_LIBRARY_PATH = os.environ.get('GDAL_LIBRARY_PATH') or next(
+    (p for p in gdal_paths if os.path.exists(p)), 
+    '/opt/homebrew/lib/libgdal.dylib'
+)
+
+geos_paths = [
+    '/opt/homebrew/lib/libgeos_c.dylib',
+    '/usr/local/lib/libgeos_c.dylib',
+]
+GEOS_LIBRARY_PATH = os.environ.get('GEOS_LIBRARY_PATH') or next(
+    (p for p in geos_paths if os.path.exists(p)),
+    '/opt/homebrew/lib/libgeos_c.dylib'
+)
 
 
 # Quick-start development settings - unsuitable for production
@@ -37,8 +59,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.gis',  # GeoDjango for PostGIS
     'rest_framework',
-    'drf_yasg',
     'corsheaders',
     'api',
 ]
@@ -79,8 +101,12 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.contrib.gis.db.backends.postgis',
+        'NAME': 'mcap_query_db',
+        'USER': 'postgres',
+        'PASSWORD': 'postgres',
+        'HOST': 'localhost',
+        'PORT': '5433',
     }
 }
 

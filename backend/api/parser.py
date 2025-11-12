@@ -31,6 +31,72 @@ class Parser:
             duration = msg_end - msg_start
             date = datetime.datetime.fromtimestamp(int(msg_start)).strftime('%Y-%m-%d %H:%M:%S')
 
+            # Parse GPS coordinates from vectornav_position_data
+            latitude = None
+            longitude = None
+            try:
+                message_count = 0
+                for schema, channel, message, proto_msg in reader.iter_decoded_messages(topics="evelogger_vectornav_position_data"):
+                    message_count += 1
+                    # Debug: Print available attributes to understand the structure (first message only)
+                    if message_count == 1:
+                        # Get all field names from the protobuf message
+                        if hasattr(proto_msg, 'DESCRIPTOR'):
+                            field_names = [field.name for field in proto_msg.DESCRIPTOR.fields]
+                            print(f"Debug: Available protobuf fields: {field_names}")
+                    
+                    # Try to extract latitude and longitude from the protobuf message
+                    # Common field names: latitude, longitude, lat, lon, position_lat, position_lon
+                    if hasattr(proto_msg, 'latitude') and hasattr(proto_msg, 'longitude'):
+                        latitude = float(proto_msg.latitude)
+                        longitude = float(proto_msg.longitude)
+                        break
+                    elif hasattr(proto_msg, 'lat') and hasattr(proto_msg, 'lon'):
+                        latitude = float(proto_msg.lat)
+                        longitude = float(proto_msg.lon)
+                        break
+                    elif hasattr(proto_msg, 'position_lat') and hasattr(proto_msg, 'position_lon'):
+                        latitude = float(proto_msg.position_lat)
+                        longitude = float(proto_msg.position_lon)
+                        break
+                    # Try more field variations
+                    elif hasattr(proto_msg, 'Latitude') and hasattr(proto_msg, 'Longitude'):
+                        latitude = float(proto_msg.Latitude)
+                        longitude = float(proto_msg.Longitude)
+                        break
+                    elif hasattr(proto_msg, 'gps_lat') and hasattr(proto_msg, 'gps_lon'):
+                        latitude = float(proto_msg.gps_lat)
+                        longitude = float(proto_msg.gps_lon)
+                        break
+                    # If the message has a nested structure, try common patterns
+                    elif hasattr(proto_msg, 'position'):
+                        pos = proto_msg.position
+                        if hasattr(pos, 'latitude') and hasattr(pos, 'longitude'):
+                            latitude = float(pos.latitude)
+                            longitude = float(pos.longitude)
+                            break
+                    # Try accessing via message descriptor
+                    elif hasattr(proto_msg, 'DESCRIPTOR'):
+                        # Try to find any field containing 'lat' or 'lon'
+                        for field in proto_msg.DESCRIPTOR.fields:
+                            field_name = field.name.lower()
+                            if 'lat' in field_name and latitude is None:
+                                try:
+                                    latitude = float(getattr(proto_msg, field.name))
+                                except:
+                                    pass
+                            if 'lon' in field_name and longitude is None:
+                                try:
+                                    longitude = float(getattr(proto_msg, field.name))
+                                except:
+                                    pass
+                        if latitude is not None and longitude is not None:
+                            break
+            except Exception as e:
+                # If GPS parsing fails, continue without GPS data
+                # Uncomment to debug: print(f"GPS parsing error: {e}")
+                pass
+
             # Return data as dictionary
             return {
                 "channels": channels,
@@ -38,7 +104,9 @@ class Parser:
                 "start_time": msg_start,
                 "end_time": msg_end,
                 "duration": duration,
-                "formatted_date": date
+                "formatted_date": date,
+                "latitude": latitude,
+                "longitude": longitude
             }
 
 """
