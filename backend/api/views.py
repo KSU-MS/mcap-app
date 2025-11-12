@@ -7,6 +7,7 @@ from .serializers import McapLogSerializer , ParseSummaryRequestSerializer
 from .parser import Parser
 import os
 import datetime
+from django.utils import timezone
 from django.conf import settings
 
 class McapLogViewSet(viewsets.ModelViewSet):
@@ -59,7 +60,9 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 serializer.validated_data['duration_seconds'] = parsed_data.get("duration", 0)
                 
                 if parsed_data.get("start_time"):
-                    serializer.validated_data['captured_at'] = datetime.datetime.fromtimestamp(parsed_data.get("start_time"))
+                    # Convert timestamp to timezone-aware datetime
+                    naive_dt = datetime.datetime.fromtimestamp(parsed_data.get("start_time"))
+                    serializer.validated_data['captured_at'] = timezone.make_aware(naive_dt)
                 
                 serializer.validated_data['parse_status'] = "completed"
             except Exception as e:
