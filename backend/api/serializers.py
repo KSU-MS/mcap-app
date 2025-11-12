@@ -32,6 +32,7 @@ class McapLogSerializer(serializers.ModelSerializer):
                   'channel_count',
                   'channels',
                   'location',
+                  'lap_path',
                   'car',
                   'driver',
                   'event_type',

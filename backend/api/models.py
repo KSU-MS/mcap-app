@@ -1,5 +1,5 @@
 from django.contrib.gis.db import models
-from django.contrib.gis.geos import Point
+from django.contrib.gis.geos import Point, LineString
 
 
 class Car(models.Model):
@@ -33,7 +33,8 @@ class McapLog(models.Model):
     duration_seconds = models.FloatField(null=True)
     channel_count = models.IntegerField(default=0)
     channels = models.JSONField(default=list, blank=True, help_text="List of channel names")
-    location = models.PointField(geography=True, srid=4326, null=True, blank=True, help_text="GPS location (latitude, longitude)")
+    location = models.PointField(geography=True, srid=4326, null=True, blank=True, help_text="User-tagged location point (can be manually set or auto-extracted from lap_path in the future)")
+    lap_path = models.LineStringField(geography=True, srid=4326, null=True, blank=True, help_text="GPS path as LineString for map preview")
     notes = models.TextField(blank=True, null=True)
 
     car = models.ForeignKey(Car, null=True, blank=True, on_delete=models.SET_NULL)
