@@ -1,4 +1,5 @@
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from .models import McapLog
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -94,6 +95,120 @@ class McapLogViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+    @action(detail=True, methods=['get'], url_path='geojson')
+    def geojson(self, request, pk=None):
+        """
+        Returns simplified LineString as GeoJSON.
+        Reads from DB if available, otherwise parses from MCAP file.
+        Uses PostGIS ST_SimplifyVW for simplification.
+        """
+        mcap_log = self.get_object()
+        
+        # Get or parse lap_path
+        lap_path = mcap_log.lap_path
+        
+        # If lap_path doesn't exist in DB, try to parse from MCAP file
+        if not lap_path and mcap_log.original_uri:
+            try:
+                # Extract file path from original_uri
+                # original_uri format: /media/mcap_logs/filename.mcap
+                if mcap_log.original_uri.startswith(settings.MEDIA_URL):
+                    file_name = mcap_log.original_uri.replace(settings.MEDIA_URL, '')
+                    file_path = settings.MEDIA_ROOT / file_name
+                    
+                    if file_path.exists():
+                        # Parse GPS coordinates from MCAP file
+                        gps_data = GpsParser.parse_gps(str(file_path))
+                        all_coordinates = gps_data.get("all_coordinates", [])
+                        
+                        if all_coordinates:
+                            lap_path = LineString(all_coordinates, srid=4326)
+                            # Optionally save to DB for future use
+                            mcap_log.lap_path = lap_path
+                            mcap_log.save(update_fields=['lap_path'])
+            except Exception as e:
+                return Response(
+                    {'error': f'Failed to parse MCAP file: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        
+        if not lap_path:
+            return Response(
+                {'error': 'No GPS path available for this log'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Simplify using PostGIS ST_SimplifyVW
+        # Get tolerance parameter from query string (default: 0.0001 degrees, roughly 11 meters)
+        tolerance = float(request.query_params.get('tolerance', 0.0001))
+        
+        try:
+            # Use PostGIS ST_SimplifyVW function
+            from django.contrib.gis.db.models import Func
+            from django.db.models import F
+            
+            # Create a queryset with the simplified geometry
+            simplified_path = McapLog.objects.filter(pk=mcap_log.pk).annotate(
+                simplified_path=Func(
+                    F('lap_path'),
+                    tolerance,
+                    function='ST_SimplifyVW'
+                )
+            ).first().simplified_path
+            
+            # If simplification failed or returned None, use original
+            if not simplified_path:
+                simplified_path = lap_path
+        except Exception as e:
+            # Fallback: use original path if PostGIS function fails
+            print(f"Warning: ST_SimplifyVW failed, using original path: {e}")
+            simplified_path = lap_path
+        
+        # Build GeoJSON FeatureCollection
+        import json
+        features = []
+        
+        # Add simplified path as LineString
+        if simplified_path:
+            # Convert LineString to GeoJSON format
+            coordinates = list(simplified_path.coords)
+            path_feature = {
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'LineString',
+                    'coordinates': coordinates
+                },
+                'properties': {
+                    'type': 'lap_path',
+                    'id': mcap_log.id,
+                    'simplified': True
+                }
+            }
+            features.append(path_feature)
+        
+        # Add location point if available
+        if mcap_log.location:
+            location_feature = {
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'Point',
+                    'coordinates': [mcap_log.location.x, mcap_log.location.y]
+                },
+                'properties': {
+                    'type': 'tagged_location',
+                    'id': mcap_log.id
+                }
+            }
+            features.append(location_feature)
+        
+        # Return FeatureCollection
+        geojson_response = {
+            'type': 'FeatureCollection',
+            'features': features
+        }
+        
+        return Response(geojson_response, status=status.HTTP_200_OK)
 
 
 class ParseSummaryView(APIView):
