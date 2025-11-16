@@ -1,10 +1,16 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from .models import McapLog
+from .models import McapLog, Car, Driver, EventType
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .serializers import McapLogSerializer , ParseSummaryRequestSerializer
+from .serializers import (
+    McapLogSerializer, 
+    ParseSummaryRequestSerializer,
+    CarSerializer,
+    DriverSerializer,
+    EventTypeSerializer
+)
 from .parser import Parser
 from .gpsparse import GpsParser
 import os
@@ -272,3 +278,30 @@ class ParseSummaryView(APIView):
         result = Parser.parse_stuff(path)  # your Python parser returning a dict
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+class CarViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for viewing Car instances.
+    Provides list and detail views for dropdown population.
+    """
+    queryset = Car.objects.all().order_by('name')
+    serializer_class = CarSerializer
+
+
+class DriverViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for viewing Driver instances.
+    Provides list and detail views for dropdown population.
+    """
+    queryset = Driver.objects.all().order_by('name')
+    serializer_class = DriverSerializer
+
+
+class EventTypeViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for viewing EventType instances.
+    Provides list and detail views for dropdown population.
+    """
+    queryset = EventType.objects.all().order_by('name')
+    serializer_class = EventTypeSerializer

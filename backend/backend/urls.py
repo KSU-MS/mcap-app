@@ -2,12 +2,21 @@ from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from api.views import McapLogViewSet, ParseSummaryView
+from api.views import (
+    McapLogViewSet, 
+    ParseSummaryView,
+    CarViewSet,
+    DriverViewSet,
+    EventTypeViewSet
+)
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 
 router = DefaultRouter()
 router.register(r'mcap-logs', McapLogViewSet)
+router.register(r'cars', CarViewSet, basename='car')
+router.register(r'drivers', DriverViewSet, basename='driver')
+router.register(r'event-types', EventTypeViewSet, basename='event-type')
 
 # Swagger/OpenAPI schema view
 schema_view = get_schema_view(
