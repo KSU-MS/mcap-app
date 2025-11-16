@@ -175,15 +175,24 @@ class McapLogViewSet(viewsets.ModelViewSet):
         
         try:
             # Use PostGIS ST_SimplifyVW function
+            # Note: ST_SimplifyVW works with geometry, not geography, so we need to cast
             from django.contrib.gis.db.models import Func
+            from django.contrib.gis.db.models.fields import GeometryField
             from django.db.models import F
             
             # Create a queryset with the simplified geometry
+            # Cast geography to geometry using ::geometry, then simplify
             simplified_path = McapLog.objects.filter(pk=mcap_log.pk).annotate(
-                simplified_path=Func(
+                geometry_path=Func(
                     F('lap_path'),
+                    template='%(expressions)s::geometry',
+                    output_field=GeometryField(srid=4326)
+                ),
+                simplified_path=Func(
+                    F('geometry_path'),
                     tolerance,
-                    function='ST_SimplifyVW'
+                    function='ST_SimplifyVW',
+                    output_field=GeometryField(srid=4326)
                 )
             ).first().simplified_path
             
