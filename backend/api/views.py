@@ -103,13 +103,20 @@ class McapLogViewSet(viewsets.ModelViewSet):
     
     @swagger_auto_schema(
         method='get',
-        operation_description="Returns simplified LineString as GeoJSON. Reads from DB if available, otherwise parses from MCAP file. Uses PostGIS ST_SimplifyVW for simplification.",
+        operation_description="Returns LineString as GeoJSON. Reads from DB if available, otherwise parses from MCAP file. Optionally uses PostGIS ST_SimplifyVW for simplification.",
         manual_parameters=[
             openapi.Parameter(
                 'tolerance',
                 openapi.IN_QUERY,
-                description="Simplification tolerance in degrees (default: 0.0001, roughly 11 meters). Higher values result in more aggressive simplification.",
+                description="Simplification tolerance in degrees (default: 0.00001, roughly 1.1 meters). Set to 0 or omit 'simplify' parameter to return full path. Higher values result in more aggressive simplification.",
                 type=openapi.TYPE_NUMBER,
+                required=False,
+            ),
+            openapi.Parameter(
+                'simplify',
+                openapi.IN_QUERY,
+                description="Whether to apply simplification (default: false). Set to 'true' to enable simplification.",
+                type=openapi.TYPE_BOOLEAN,
                 required=False,
             ),
         ],
@@ -135,9 +142,9 @@ class McapLogViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='geojson')
     def geojson(self, request, pk=None):
         """
-        Returns simplified LineString as GeoJSON.
+        Returns LineString as GeoJSON.
         Reads from DB if available, otherwise parses from MCAP file.
-        Uses PostGIS ST_SimplifyVW for simplification.
+        By default returns the full unsimplified path. Use ?simplify=true to enable simplification.
         """
         mcap_log = self.get_object()
         
@@ -175,39 +182,46 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Simplify using PostGIS ST_SimplifyVW
-        # Get tolerance parameter from query string (default: 0.0001 degrees, roughly 11 meters)
-        tolerance = float(request.query_params.get('tolerance', 0.0001))
+        # Check if simplification is requested
+        simplify = request.query_params.get('simplify', 'false').lower() == 'true'
         
-        try:
-            # Use PostGIS ST_SimplifyVW function
-            # Note: ST_SimplifyVW works with geometry, not geography, so we need to cast
-            from django.contrib.gis.db.models import Func
-            from django.contrib.gis.db.models.fields import GeometryField
-            from django.db.models import F
+        if simplify:
+            # Simplify using PostGIS ST_SimplifyVW
+            # Get tolerance parameter from query string (default: 0.00001 degrees, roughly 1.1 meters)
+            tolerance = float(request.query_params.get('tolerance', 0.00001))
             
-            # Create a queryset with the simplified geometry
-            # Cast geography to geometry using ::geometry, then simplify
-            simplified_path = McapLog.objects.filter(pk=mcap_log.pk).annotate(
-                geometry_path=Func(
-                    F('lap_path'),
-                    template='%(expressions)s::geometry',
-                    output_field=GeometryField(srid=4326)
-                ),
-                simplified_path=Func(
-                    F('geometry_path'),
-                    tolerance,
-                    function='ST_SimplifyVW',
-                    output_field=GeometryField(srid=4326)
-                )
-            ).first().simplified_path
-            
-            # If simplification failed or returned None, use original
-            if not simplified_path:
+            try:
+                # Use PostGIS ST_SimplifyVW function
+                # Note: ST_SimplifyVW works with geometry, not geography, so we need to cast
+                from django.contrib.gis.db.models import Func
+                from django.contrib.gis.db.models.fields import GeometryField
+                from django.db.models import F
+                
+                # Create a queryset with the simplified geometry
+                # Cast geography to geometry using ::geometry, then simplify
+                simplified_path = McapLog.objects.filter(pk=mcap_log.pk).annotate(
+                    geometry_path=Func(
+                        F('lap_path'),
+                        template='%(expressions)s::geometry',
+                        output_field=GeometryField(srid=4326)
+                    ),
+                    simplified_path=Func(
+                        F('geometry_path'),
+                        tolerance,
+                        function='ST_SimplifyVW',
+                        output_field=GeometryField(srid=4326)
+                    )
+                ).first().simplified_path
+                
+                # If simplification failed or returned None, use original
+                if not simplified_path:
+                    simplified_path = lap_path
+            except Exception as e:
+                # Fallback: use original path if PostGIS function fails
+                print(f"Warning: ST_SimplifyVW failed, using original path: {e}")
                 simplified_path = lap_path
-        except Exception as e:
-            # Fallback: use original path if PostGIS function fails
-            print(f"Warning: ST_SimplifyVW failed, using original path: {e}")
+        else:
+            # Return full unsimplified path
             simplified_path = lap_path
         
         # Build GeoJSON FeatureCollection
@@ -227,7 +241,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 'properties': {
                     'type': 'lap_path',
                     'id': mcap_log.id,
-                    'simplified': True
+                    'simplified': simplify
                 }
             }
             features.append(path_feature)
