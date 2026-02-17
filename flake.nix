@@ -2,8 +2,9 @@
   description = "MCAP query backend — production-like dev environment (Python, GeoDjango, Celery, Postgres+PostGIS, Redis)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+  inputs.nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }: let
+  outputs = { self, nixpkgs, nixpkgs-unstable }: let
     supported = [ "aarch64-darwin" "x86_64-darwin" "x86_64-linux" ];
     forAllSystems = nixpkgs.lib.genAttrs supported;
     lib = nixpkgs.lib;
@@ -11,6 +12,7 @@
 
     devShells = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
+      pkgsUnstable = nixpkgs-unstable.legacyPackages.${system};
       stdenv = pkgs.stdenv;
       gdal = pkgs.gdal;
       geos = pkgs.geos;
@@ -31,7 +33,7 @@
 
         buildInputs = with pkgs; [
           python313
-          uv
+          pkgsUnstable.uv
           gdal
           geos
           postgresql

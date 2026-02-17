@@ -56,16 +56,22 @@ Then:
 
 2. **Run migrations and start the backend:**
 
+   From repo root **outside** `nix develop`, sync deps (Nix’s uv may be too old for the lockfile):
    ```bash
-   cd backend && uv sync && uv run python manage.py migrate
-   uv run python manage.py runserver
+   uv sync
    ```
+   Then inside the Nix shell:
+   ```bash
+   cd backend && ../.venv/bin/python manage.py migrate
+   ../.venv/bin/python backend/manage.py runserver
+   ```
+   If `uv run python manage.py runserver` works in the Nix shell, you can use that instead.
 
-3. **In another terminal** (with `nix develop` again):
+3. **In another terminal** (Celery):
 
    ```bash
    nix develop
-   cd backend && uv run celery -A backend worker --loglevel=info
+   cd backend && ../.venv/bin/python -m celery -A backend worker --loglevel=info
    ```
 
 4. **Frontend** (optional):
