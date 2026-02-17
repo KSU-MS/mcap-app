@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Nix dev services data (Postgres + Redis)
+.nix-data/
+
 # Media files (uploaded files should not be in git)
 backend/media/
 media/

@@ -166,6 +166,22 @@ class McapLogViewSet(viewsets.ModelViewSet):
             except (ValueError, TypeError, IndexError):
                 pass  # Ignore invalid location formats silently
         
+        # ===== CUSTOM TAG FILTERING =====
+        # Filter logs that have the given tag in their tags array
+        tag = self.request.query_params.get('tag', None)
+        if tag:
+            tag = str(tag).strip()
+            if tag:
+                queryset = queryset.filter(tags__contains=[tag])
+        
+        # ===== CHANNEL FILTERING =====
+        # Filter logs that contain the given channel name in their channels array
+        channel = self.request.query_params.get('channel', None)
+        if channel:
+            channel = str(channel).strip()
+            if channel:
+                queryset = queryset.filter(channels__contains=[channel])
+        
         # Return filtered queryset ordered by creation date (newest first)
         # Pagination is handled automatically by DRF after this method returns
         return queryset.order_by('-created_at')
@@ -397,6 +413,9 @@ class McapLogViewSet(viewsets.ModelViewSet):
         
         # Handle CSV/LD conversion
         if output_format.startswith('csv_') or output_format == 'ld':
+            print(
+                f"[download] CSV/LD conversion requested: ids={log_ids}, count={len(mcap_logs)}, format={output_format}"
+            )
             return self._download_as_converted(mcap_logs, output_format)
         
         # Handle MCAP download (original behavior)
@@ -411,12 +430,18 @@ class McapLogViewSet(viewsets.ModelViewSet):
         from django.conf import settings
         import datetime
         
+        print(
+            f"[download] CSV conversion started: format={format}, count={len(mcap_logs)}"
+        )
         conversion_results = {}
         conversion_errors = []
         
         # Process conversions synchronously
         for mcap_log in mcap_logs:
             try:
+                print(
+                    f"[download] log id={mcap_log.id} file_name={mcap_log.file_name}"
+                )
                 # Determine source file path
                 file_path = None
                 
@@ -443,9 +468,15 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 
                 if not file_path or not file_path.exists():
                     conversion_errors.append(f"{mcap_log.file_name} (ID: {mcap_log.id}) - MCAP file not found")
+                    print(
+                        f"[download] log id={mcap_log.id} skipped: MCAP file not found"
+                    )
                     continue
                 
                 file_path = file_path.resolve()
+                print(
+                    f"[download] log id={mcap_log.id} resolved path={file_path}, starting conversion"
+                )
                 
                 # Create output directory for converted files
                 converted_dir = Path(settings.MEDIA_ROOT) / 'converted'
@@ -465,10 +496,19 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 # Return the path relative to MEDIA_ROOT
                 relative_path = output_path.relative_to(settings.MEDIA_ROOT)
                 conversion_results[mcap_log] = str(relative_path)
+                print(
+                    f"[download] log id={mcap_log.id} converted successfully -> {output_path}"
+                )
                 
             except Exception as e:
                 conversion_errors.append(f"{mcap_log.file_name} (ID: {mcap_log.id}) - conversion error: {str(e)}")
+                print(
+                    f"[download] log id={mcap_log.id} conversion error: {e}"
+                )
         
+        print(
+            f"[download] conversions done: succeeded={len(conversion_results)}, failed={len(conversion_errors)}"
+        )
         if not conversion_results:
             return Response(
                 {
@@ -479,6 +519,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
             )
         
         # Create ZIP file with converted CSV files
+        print("[download] creating ZIP archive")
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
         temp_file_path = temp_file.name
         temp_file.close()
@@ -508,6 +549,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
                         files_missing.append(f"{mcap_log.file_name} (ID: {mcap_log.id}) - error: {str(file_error)}")
                         continue
             
+            print(f"[download] ZIP written: files_added={files_added}")
             if files_added == 0:
                 os.unlink(temp_file_path)
                 return Response(
@@ -530,6 +572,9 @@ class McapLogViewSet(viewsets.ModelViewSet):
             
             os.unlink(temp_file_path)
             
+            print(
+                f"[download] sending response: filename={zip_filename}, size={len(zip_content)} bytes"
+            )
             # Create response
             response = HttpResponse(zip_content, content_type='application/zip')
             response['Content-Disposition'] = f'attachment; filename="{zip_filename}"'
@@ -838,6 +883,32 @@ class McapLogViewSet(viewsets.ModelViewSet):
             'count': len(results),
             'results': results
         }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='tag-names')
+    def tag_names(self, request):
+        """
+        Return distinct user-defined tag values across all logs (for filter dropdown).
+        """
+        seen = set()
+        for tags_list in McapLog.objects.exclude(tags=[]).values_list('tags', flat=True):
+            if tags_list:
+                for t in tags_list:
+                    if isinstance(t, str) and t.strip():
+                        seen.add(t.strip())
+        return Response(sorted(seen))
+
+    @action(detail=False, methods=['get'], url_path='channel-names')
+    def channel_names(self, request):
+        """
+        Return distinct channel names across all logs (for filter dropdown).
+        """
+        seen = set()
+        for ch_list in McapLog.objects.exclude(channels=[]).values_list('channels', flat=True):
+            if ch_list:
+                for c in ch_list:
+                    if isinstance(c, str) and c.strip():
+                        seen.add(c.strip())
+        return Response(sorted(seen))
 
 
 class ParseSummaryView(APIView):

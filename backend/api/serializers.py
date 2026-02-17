@@ -73,6 +73,7 @@ class McapLogSerializer(serializers.ModelSerializer):
                   'driver_id',
                   'event_type_id',
                   'notes',
+                  'tags',
                   'file'
                   ]
         

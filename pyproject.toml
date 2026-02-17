@@ -8,6 +8,7 @@ dependencies = [
     "django-cors-headers>=4.9.0",
     "djangorestframework>=3.16.1",
     "mcap-protobuf-support>=0.5.3",
+    "protobuf>=4.25.0,<6",
     "psycopg2-binary>=2.9.11",
     "drf-yasg>=1.21.7",
     "celery>=5.3.0",

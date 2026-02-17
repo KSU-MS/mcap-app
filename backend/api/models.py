@@ -37,6 +37,7 @@ class McapLog(models.Model):
     file_size = models.BigIntegerField(null=True, blank=True, help_text="File size in bytes")
     lap_path = models.LineStringField(geography=True, srid=4326, null=True, blank=True, help_text="GPS path as LineString for map preview")
     notes = models.TextField(blank=True, null=True)
+    tags = models.JSONField(default=list, blank=True, help_text="User-defined tags for filtering (e.g. bell crank testing, other test)")
 
     car = models.ForeignKey(Car, null=True, blank=True, on_delete=models.SET_NULL)
     driver = models.ForeignKey(Driver, null=True, blank=True, on_delete=models.SET_NULL)

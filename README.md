@@ -4,12 +4,12 @@ A Django REST Framework backend for managing and parsing **Formula SAE telemetry
 
 ## Monorepo layout
 - `backend/` — Django + Celery API (PostGIS/Redis)
-- `frontend/` — Next.js client (npm)
+- `frontend/` — Next.js client (pnpm)
 
 ### Quick start
 - Backend (local): `./scripts/dev_backend_local.sh`
 - Celery worker (local, optional): `./scripts/dev_celery_local.sh`
-- Frontend: `cd frontend && npm install && npm run dev`
+- Frontend: `cd frontend && pnpm install && pnpm run dev`
 
 The service automates:
 - Getting MCAP log files from the car’s onboard Pi

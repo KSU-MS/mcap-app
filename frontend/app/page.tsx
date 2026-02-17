@@ -332,6 +332,7 @@ interface McapLog {
   driver?: string | { id: number; name: string };
   event_type?: string | { id: number; name: string };
   notes?: string;
+  tags?: string[];
   created_at?: string;
   updated_at?: string;
 }
@@ -358,7 +359,9 @@ export default function Home() {
     driver: '',
     event_type: '',
     notes: '',
+    tags: [] as string[],
   });
+  const [editTagInput, setEditTagInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [loadingLog, setLoadingLog] = useState(false);
@@ -373,10 +376,45 @@ export default function Home() {
   const [downloadFormat, setDownloadFormat] = useState<'mcap' | 'csv_omni' | 'csv_tvn' | 'ld'>('mcap');
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [bulkDownloadError, setBulkDownloadError] = useState<string | null>(null);
+  const [downloadCompleteMessage, setDownloadCompleteMessage] = useState<string | null>(null);
   const [cars, setCars] = useState<{ id: number; name: string }[]>([]);
   const [drivers, setDrivers] = useState<{ id: number; name: string }[]>([]);
   const [eventTypes, setEventTypes] = useState<{ id: number; name: string }[]>([]);
   const [loadingLookups, setLoadingLookups] = useState(false);
+  // Filter state for list
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+  const [filterCarId, setFilterCarId] = useState('');
+  const [filterEventTypeId, setFilterEventTypeId] = useState('');
+  const [filterDriverId, setFilterDriverId] = useState('');
+  const [filterLocationBbox, setFilterLocationBbox] = useState('');
+  const [filterChannel, setFilterChannel] = useState('');
+  const [filterTag, setFilterTag] = useState('');
+  const [tagNames, setTagNames] = useState<string[]>([]);
+  const [channelNames, setChannelNames] = useState<string[]>([]);
+
+  // Play a short chime (Web Audio API) when download completes
+  const playChime = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      const playTone = (frequency: number, startTime: number, duration: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = frequency;
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.15, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      };
+      playTone(523.25, 0, 0.12);
+      playTone(659.25, 0.14, 0.2);
+    } catch {
+      // ignore if AudioContext not supported or blocked
+    }
+  };
 
   // Fetch cars, drivers, and event types for dropdowns
   const fetchLookups = async () => {
@@ -413,12 +451,29 @@ export default function Home() {
         const eventTypesResponse = await fetch(`${API_BASE_URL}/event-types/`);
         if (eventTypesResponse.ok) {
           const eventTypesData = await eventTypesResponse.json();
-          // Handle paginated response (DRF returns {results: [...]}) or direct array
           const eventTypesArray = Array.isArray(eventTypesData) ? eventTypesData : (eventTypesData.results || []);
           setEventTypes(eventTypesArray);
         }
       } catch (err) {
         console.warn('Failed to fetch event types:', err);
+      }
+
+      // Fetch distinct tag names and channel names for filter dropdowns
+      try {
+        const [tagRes, channelRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/mcap-logs/tag-names/`),
+          fetch(`${API_BASE_URL}/mcap-logs/channel-names/`),
+        ]);
+        if (tagRes.ok) {
+          const names = await tagRes.json();
+          setTagNames(Array.isArray(names) ? names : []);
+        }
+        if (channelRes.ok) {
+          const names = await channelRes.json();
+          setChannelNames(Array.isArray(names) ? names : []);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch tag/channel names:', err);
       }
     } catch (err) {
       console.error('Error fetching lookups:', err);
@@ -427,14 +482,22 @@ export default function Home() {
     }
   };
 
-  // Fetch logs from the API (paginated; server-side search)
-  const fetchLogs = async (page: number = 1, search: string = '') => {
+  // Fetch logs from the API (paginated; server-side search and filters)
+  const fetchLogs = async (page: number = currentPage) => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
       params.set('page', String(page));
-      if (search.trim()) params.set('search', search.trim());
+      if (debouncedSearchQuery.trim()) params.set('search', debouncedSearchQuery.trim());
+      if (filterStartDate.trim()) params.set('start_date', filterStartDate.trim());
+      if (filterEndDate.trim()) params.set('end_date', filterEndDate.trim());
+      if (filterCarId.trim()) params.set('car_id', filterCarId.trim());
+      if (filterEventTypeId.trim()) params.set('event_type_id', filterEventTypeId.trim());
+      if (filterDriverId.trim()) params.set('driver_id', filterDriverId.trim());
+      if (filterLocationBbox.trim()) params.set('location', filterLocationBbox.trim());
+      if (filterChannel.trim()) params.set('channel', filterChannel.trim());
+      if (filterTag.trim()) params.set('tag', filterTag.trim());
 
       const url = `${API_BASE_URL}/mcap-logs/?${params.toString()}`;
       const response = await fetch(url);
@@ -444,7 +507,6 @@ export default function Home() {
       const data = await response.json();
 
       if (Array.isArray(data)) {
-        // Fallback if pagination is disabled
         setLogs(data);
         setTotalCount(data.length);
       } else if (data?.results) {
@@ -460,6 +522,18 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const clearFilters = () => {
+    setFilterStartDate('');
+    setFilterEndDate('');
+    setFilterCarId('');
+    setFilterEventTypeId('');
+    setFilterDriverId('');
+    setFilterLocationBbox('');
+    setFilterChannel('');
+    setFilterTag('');
+    setCurrentPage(1);
   };
 
   const removeSelectedFileAtIndex = (index: number) => {
@@ -510,7 +584,7 @@ export default function Home() {
       setSelectedLogIds([]);
       setSelectedFiles([]);
       setCurrentPage(1);
-      await fetchLogs(1, debouncedSearchQuery);
+      await fetchLogs(1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload file');
       console.error('Error uploading file:', err);
@@ -617,7 +691,9 @@ export default function Home() {
         driver: driverId,
         event_type: eventId,
         notes: log.notes || '',
+        tags: Array.isArray(log.tags) ? [...log.tags] : [],
       });
+      setEditTagInput('');
       setIsEditModalOpen(true);
     } catch (err) {
       // Error already handled in fetchLog
@@ -632,9 +708,10 @@ export default function Home() {
     try {
       const method = usePut ? 'PUT' : 'PATCH';
       
-      // Build request body - convert IDs to numbers for car, driver, event_type
+      // Build request body - convert IDs to numbers for car, driver, event_type; include tags
       const body: any = {
         notes: editForm.notes || '',
+        tags: editForm.tags && editForm.tags.length > 0 ? editForm.tags : [],
       };
 
       // Convert string IDs to numbers
@@ -729,7 +806,6 @@ export default function Home() {
       }
 
       // Optimistically update the logs state with the response data
-      // This ensures the UI updates immediately even if fetchLogs is slow
       setLogs((prevLogs) =>
         prevLogs.map((log) =>
           log.id === id
@@ -738,16 +814,27 @@ export default function Home() {
                 car: updatedData.car,
                 driver: updatedData.driver,
                 event_type: updatedData.event_type,
-                notes: updatedData.notes || log.notes,
+                notes: updatedData.notes ?? log.notes,
+                tags: updatedData.tags ?? log.tags ?? [],
               }
             : log
         )
       );
 
+      // Refresh tag names for filter dropdown in case a new tag was added
+      try {
+        const tagRes = await fetch(`${API_BASE_URL}/mcap-logs/tag-names/`);
+        if (tagRes.ok) {
+          const names = await tagRes.json();
+          setTagNames(Array.isArray(names) ? names : []);
+        }
+      } catch {
+        // ignore
+      }
+
       setIsEditModalOpen(false);
       setSelectedLog(null);
-      // Still refetch to ensure we have the latest data
-      await fetchLogs(currentPage, debouncedSearchQuery);
+      await fetchLogs(currentPage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update log');
       console.error('Error updating log:', err);
@@ -775,7 +862,7 @@ export default function Home() {
 
       setIsDeleteModalOpen(false);
       setLogToDelete(null);
-      await fetchLogs(currentPage, debouncedSearchQuery);
+      await fetchLogs(currentPage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete log');
       console.error('Error deleting log:', err);
@@ -855,12 +942,11 @@ export default function Home() {
   }, [searchQuery]);
 
   useEffect(() => {
-    // Reset to page 1 on new search
     setSelectedLogIds([]);
     setCurrentPage(1);
-    fetchLogs(1, debouncedSearchQuery);
+    fetchLogs(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearchQuery]);
+  }, [debouncedSearchQuery, filterStartDate, filterEndDate, filterCarId, filterEventTypeId, filterDriverId, filterLocationBbox, filterChannel, filterTag]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
@@ -868,7 +954,7 @@ export default function Home() {
     const nextPage = Math.min(Math.max(1, page), totalPages);
     setSelectedLogIds([]);
     setCurrentPage(nextPage);
-    fetchLogs(nextPage, debouncedSearchQuery);
+    fetchLogs(nextPage);
   };
 
   const terminalStatus = (s?: string) => {
@@ -984,6 +1070,8 @@ export default function Home() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      playChime();
+      setDownloadCompleteMessage('Download complete!');
       setIsDownloadDialogOpen(false);
     } catch (err) {
       setBulkDownloadError(err instanceof Error ? err.message : 'Failed to download files');
@@ -996,11 +1084,30 @@ export default function Home() {
   // Fetch logs and lookups on component mount
   useEffect(() => {
     fetchLookups();
-    fetchLogs(1, '');
+    fetchLogs(1);
   }, []);
+
+  // Auto-dismiss download complete toast after 4 seconds
+  useEffect(() => {
+    if (!downloadCompleteMessage) return;
+    const t = setTimeout(() => setDownloadCompleteMessage(null), 4000);
+    return () => clearTimeout(t);
+  }, [downloadCompleteMessage]);
 
   return (
     <div className="min-h-screen bg-white py-8 px-4 sm:px-8">
+      {/* Download complete toast */}
+      {downloadCompleteMessage && (
+        <div
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-900 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-300"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="inline-flex h-2 w-2 rounded-full bg-green-500" />
+          {downloadCompleteMessage}
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto">
         <h1 className="text-4xl font-bold text-gray-900 mb-8">
           MCAP Log Manager
@@ -1119,7 +1226,7 @@ export default function Home() {
                   )}
                 </Button>
                 <Button
-                  onClick={() => fetchLogs(currentPage, debouncedSearchQuery)}
+                  onClick={() => fetchLogs(currentPage)}
                   disabled={loading}
                   variant="outline"
                   className="border-gray-300 text-gray-700 hover:bg-gray-50"
@@ -1139,6 +1246,115 @@ export default function Home() {
                   className="pl-10 bg-white border-gray-300"
                 />
               </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-2 mt-3">
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">From</Label>
+                <Input
+                  type="date"
+                  value={filterStartDate}
+                  onChange={(e) => { setFilterStartDate(e.target.value); setCurrentPage(1); }}
+                  className="w-[130px] bg-white border-gray-300"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">To</Label>
+                <Input
+                  type="date"
+                  value={filterEndDate}
+                  onChange={(e) => { setFilterEndDate(e.target.value); setCurrentPage(1); }}
+                  className="w-[130px] bg-white border-gray-300"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">Car</Label>
+                <Select value={filterCarId || 'all'} onValueChange={(v) => { setFilterCarId(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                  <SelectTrigger className="w-[140px] bg-white border-gray-300">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {cars.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">Event type</Label>
+                <Select value={filterEventTypeId || 'all'} onValueChange={(v) => { setFilterEventTypeId(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                  <SelectTrigger className="w-[140px] bg-white border-gray-300">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {eventTypes.map((e) => (
+                      <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">Driver</Label>
+                <Select value={filterDriverId || 'all'} onValueChange={(v) => { setFilterDriverId(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                  <SelectTrigger className="w-[140px] bg-white border-gray-300">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {drivers.map((d) => (
+                      <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">Tag</Label>
+                <Select value={filterTag || 'all'} onValueChange={(v) => { setFilterTag(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                  <SelectTrigger className="w-[160px] bg-white border-gray-300">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {tagNames.map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">Channel</Label>
+                <Select value={filterChannel || 'all'} onValueChange={(v) => { setFilterChannel(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                  <SelectTrigger className="w-[180px] bg-white border-gray-300">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {channelNames.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs text-gray-500">Location (bbox)</Label>
+                <Input
+                  type="text"
+                  placeholder="min_lon,min_lat,max_lon,max_lat"
+                  value={filterLocationBbox}
+                  onChange={(e) => { setFilterLocationBbox(e.target.value); setCurrentPage(1); }}
+                  className="w-[200px] bg-white border-gray-300 text-sm"
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-gray-300 text-gray-700"
+                onClick={() => clearFilters()}
+              >
+                Clear filters
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -1179,6 +1395,7 @@ export default function Home() {
                     <th>Car</th>
                     <th>Driver</th>
                     <th>Event</th>
+                    <th>Tags</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -1263,6 +1480,19 @@ export default function Home() {
                       </td>
                       <td className="text-sm text-gray-700">
                         {getName(log.event_type)}
+                      </td>
+                      <td className="text-sm text-gray-700 max-w-[180px]">
+                        {log.tags && log.tags.length > 0 ? (
+                          <span className="flex flex-wrap gap-1">
+                            {log.tags.map((t) => (
+                              <span key={t} className="inline-flex px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 text-xs border border-gray-200">
+                                {t}
+                              </span>
+                            ))}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td>
                         <div className="flex gap-2 flex-wrap">
@@ -1421,6 +1651,20 @@ export default function Home() {
 
               {bulkDownloadError && (
                 <p className="text-sm text-red-600">{bulkDownloadError}</p>
+              )}
+
+              {bulkDownloading && (
+                <div className="flex items-center gap-3 rounded-md border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-900">
+                  <span
+                    className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-purple-400 border-t-transparent"
+                    aria-hidden
+                  />
+                  <span>
+                    {downloadFormat === 'mcap'
+                      ? 'Preparing ZIP…'
+                      : `Converting to ${downloadFormat.replace('csv_', '').toUpperCase()} and preparing ZIP…`}
+                  </span>
+                </div>
               )}
             </div>
 
@@ -1746,6 +1990,62 @@ export default function Home() {
                       </SelectContent>
                     </Select>
                   )}
+                  </div>
+                  <div>
+                    <Label className="text-gray-700">Tags</Label>
+                    <p className="text-xs text-gray-500 mb-1">Add custom tags for filtering (e.g. bell crank testing)</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {(editForm.tags || []).map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
+                        >
+                          {tag}
+                          <button
+                            type="button"
+                            aria-label={`Remove tag ${tag}`}
+                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
+                            onClick={() => setEditForm({ ...editForm, tags: (editForm.tags || []).filter((t) => t !== tag) })}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="New tag"
+                        value={editTagInput}
+                        onChange={(e) => setEditTagInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const v = editTagInput.trim();
+                            if (v && !(editForm.tags || []).includes(v)) {
+                              setEditForm({ ...editForm, tags: [...(editForm.tags || []), v] });
+                              setEditTagInput('');
+                            }
+                          }
+                        }}
+                        className="flex-1 bg-white border-gray-300"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="border-gray-300"
+                        onClick={() => {
+                          const v = editTagInput.trim();
+                          if (v && !(editForm.tags || []).includes(v)) {
+                            setEditForm({ ...editForm, tags: [...(editForm.tags || []), v] });
+                            setEditTagInput('');
+                          }
+                        }}
+                      >
+                        Add
+                      </Button>
+                    </div>
                   </div>
                   <div>
                   <Label htmlFor="notes" className="text-gray-700">Notes</Label>
