@@ -254,9 +254,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "celery" },
+    { name = "django" },
     { name = "django-cors-headers" },
     { name = "djangorestframework" },
     { name = "drf-yasg" },
+    { name = "mcap" },
     { name = "mcap-protobuf-support" },
     { name = "protobuf" },
     { name = "psycopg2-binary" },
@@ -266,9 +268,11 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "celery", specifier = ">=5.3.0" },
+    { name = "django", specifier = ">=5.2.7" },
     { name = "django-cors-headers", specifier = ">=4.9.0" },
     { name = "djangorestframework", specifier = ">=3.16.1" },
     { name = "drf-yasg", specifier = ">=1.21.7" },
+    { name = "mcap", specifier = ">=1.1.0" },
     { name = "mcap-protobuf-support", specifier = ">=0.5.3" },
     { name = "protobuf", specifier = ">=4.25.0,<6" },
     { name = "psycopg2-binary", specifier = ">=2.9.11" },

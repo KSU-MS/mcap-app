@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
 import { Button } from '@/components/ui/button';
@@ -392,6 +392,7 @@ export default function Home() {
   const [filterTag, setFilterTag] = useState('');
   const [tagNames, setTagNames] = useState<string[]>([]);
   const [channelNames, setChannelNames] = useState<string[]>([]);
+  const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
 
   // Play a short chime (Web Audio API) when download completes
   const playChime = () => {
@@ -481,6 +482,19 @@ export default function Home() {
       setLoadingLookups(false);
     }
   };
+
+  const checkDatabaseStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/mcap-logs/?page=1`);
+      if (!response.ok) {
+        throw new Error(`Backend returned ${response.status}`);
+      }
+      setDbStatus('connected');
+    } catch (err) {
+      setDbStatus('disconnected');
+      console.error('Database status check failed:', err);
+    }
+  }, []);
 
   // Fetch logs from the API (paginated; server-side search and filters)
   const fetchLogs = async (page: number = currentPage) => {
@@ -1087,6 +1101,23 @@ export default function Home() {
     fetchLogs(1);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const runCheck = async () => {
+      if (cancelled) return;
+      await checkDatabaseStatus();
+    };
+
+    runCheck();
+    const interval = setInterval(runCheck, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [checkDatabaseStatus]);
+
   // Auto-dismiss download complete toast after 4 seconds
   useEffect(() => {
     if (!downloadCompleteMessage) return;
@@ -1096,6 +1127,18 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-white py-8 px-4 sm:px-8">
+      <div className="fixed top-4 right-4 z-50" title={`Database: ${dbStatus}`} aria-label={`Database status: ${dbStatus}`}>
+        <span
+          className={`block h-3 w-3 rounded-full ${
+            dbStatus === 'connected'
+              ? 'bg-green-500'
+              : dbStatus === 'disconnected'
+              ? 'bg-red-500'
+              : 'bg-amber-400'
+          }`}
+        />
+      </div>
+
       {/* Download complete toast */}
       {downloadCompleteMessage && (
         <div
