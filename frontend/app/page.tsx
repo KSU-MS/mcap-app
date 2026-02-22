@@ -1,2167 +1,456 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import dynamic from 'next/dynamic';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, Download } from 'lucide-react';
 
-// Map Preview Component - small preview for table rows
-const MapPreview = dynamic(
-  () => {
-    return Promise.resolve().then(() => {
-      const React = require('react');
-      const L = require('leaflet');
-      const { MapContainer, TileLayer, GeoJSON, useMap } = require('react-leaflet');
+import { UploadCard } from '@/components/mcap/UploadCard';
+import { LogsFilters } from '@/components/mcap/LogsFilters';
+import { LogsToolbar } from '@/components/mcap/LogsToolbar';
+import { LogsTable } from '@/components/mcap/LogsTable';
+import { ViewModal } from '@/components/mcap/modals/ViewModal';
+import { EditModal } from '@/components/mcap/modals/EditModal';
+import { DeleteConfirmModal } from '@/components/mcap/modals/DeleteConfirmModal';
+import { DownloadModal } from '@/components/mcap/modals/DownloadModal';
+import { MapModal } from '@/components/mcap/modals/MapModal';
 
-      // Fix for default marker icons in Next.js
-      if (typeof window !== 'undefined') {
-        delete (L.Icon.Default.prototype as any)._getIconUrl;
-        L.Icon.Default.mergeOptions({
-          iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-          iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-          shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-        });
-      }
+import {
+  fetchLogs, fetchLog, fetchGeoJson, fetchLookups,
+  updateLog, deleteLogs, bulkDownload, checkDbStatus,
+} from '@/lib/mcap/api';
+import type { McapLog, DownloadFormat } from '@/lib/mcap/types';
 
-      const FitBounds = ({ geoJsonData }: { geoJsonData: any }) => {
-        const map = useMap();
-        React.useEffect(() => {
-          if (geoJsonData && map) {
-            try {
-              const geoJsonLayer = L.geoJSON(geoJsonData as any);
-              const bounds = geoJsonLayer.getBounds();
-              if (bounds.isValid()) {
-                map.fitBounds(bounds, { padding: [5, 5] });
-              }
-            } catch (err) {
-              // Silently fail for preview
-            }
-          }
-        }, [geoJsonData, map]);
-        return null;
-      };
+const PAGE_SIZE = 10;
 
-      return ({ logId, apiBaseUrl, onMapClick }: { logId: number; apiBaseUrl: string; onMapClick?: (logId: number) => void }) => {
-      const [geoJsonData, setGeoJsonData] = React.useState(null as any);
-      const [loading, setLoading] = React.useState(true);
-      const [mounted, setMounted] = React.useState(false);
-      const [containerReady, setContainerReady] = React.useState(false);
+// ──────────────────────────────────────────────────────────────
+// The actual page content (needs Suspense for useSearchParams)
+// ──────────────────────────────────────────────────────────────
+function McapDashboard() {
+  const router = useRouter();
+  const params = useSearchParams();
 
-      React.useEffect(() => {
-        // Use a small delay to ensure DOM is ready
-        const timer = setTimeout(() => {
-          setMounted(true);
-        }, 100);
-        return () => clearTimeout(timer);
-      }, []);
+  // ── Derived filter values from URL ──
+  const currentPage = parseInt(params.get('page') ?? '1', 10);
+  const filters = {
+    search: params.get('search') ?? '',
+    start_date: params.get('start_date') ?? '',
+    end_date: params.get('end_date') ?? '',
+    car: params.get('car') ?? '',
+    event_type: params.get('event_type') ?? '',
+    driver: params.get('driver') ?? '',
+    location: params.get('location') ?? '',
+    channel: params.get('channel') ?? '',
+    tag: params.get('tag') ?? '',
+    page: currentPage,
+  };
 
-      // Check if container is ready after mount
-      React.useEffect(() => {
-        if (mounted) {
-          // Additional small delay to ensure container is in DOM
-          const timer = setTimeout(() => {
-            setContainerReady(true);
-          }, 50);
-          return () => clearTimeout(timer);
-        }
-      }, [mounted]);
-
-      React.useEffect(() => {
-        if (!mounted) return;
-        
-        let cancelled = false;
-        const fetchGeoJson = async () => {
-          try {
-            const response = await fetch(`${apiBaseUrl}/mcap-logs/${logId}/geojson`);
-            if (!response.ok) {
-              throw new Error('Failed to fetch');
-            }
-            const data = await response.json();
-            if (!cancelled) {
-              setGeoJsonData(data);
-            }
-          } catch (err) {
-            // Silently fail for preview
-          } finally {
-            if (!cancelled) {
-              setLoading(false);
-            }
-          }
-        };
-
-        fetchGeoJson();
-        return () => {
-          cancelled = true;
-        };
-      }, [logId, apiBaseUrl, mounted]);
-
-      const geoJsonStyle = {
-        color: '#3388ff',
-        weight: 2,
-        opacity: 0.8,
-        fillOpacity: 0.2,
-      };
-
-      const pointToLayer = (feature: any, latlng: L.LatLng) => {
-        return L.circleMarker(latlng, {
-          radius: 3,
-          fillColor: '#3388ff',
-          color: '#fff',
-          weight: 1,
-          opacity: 1,
-          fillOpacity: 0.8,
-        });
-      };
-
-      // Calculate center from GeoJSON if available
-      let center: [number, number] = [0, 0];
-      if (geoJsonData?.features?.[0]?.geometry?.coordinates) {
-        const coords = geoJsonData.features[0].geometry.coordinates;
-        if (geoJsonData.features[0].geometry.type === 'Point') {
-          center = [coords[1], coords[0]];
-        } else if (geoJsonData.features[0].geometry.type === 'LineString' && coords.length > 0) {
-          center = [coords[0][1], coords[0][0]];
-        }
-      }
-
-      if (!mounted) {
-        return (
-          <div className="w-full h-24 bg-gray-100 rounded flex items-center justify-center">
-            <span className="text-xs text-gray-500">Loading...</span>
-          </div>
-        );
-      }
-
-      if (loading) {
-        return (
-          <div className="w-full h-24 bg-gray-100 rounded flex items-center justify-center">
-            <span className="text-xs text-gray-500">Loading...</span>
-          </div>
-        );
-      }
-
-      if (!geoJsonData) {
-        return (
-          <div className="w-full h-24 bg-gray-100 rounded flex items-center justify-center">
-            <span className="text-xs text-gray-500">No map data</span>
-          </div>
-        );
-      }
-
-      return (
-        <div 
-          className="w-full h-24 rounded overflow-hidden border border-gray-200 cursor-pointer hover:border-purple-500 transition-colors"
-          onClick={() => onMapClick?.(logId)}
-          title="Click to view full map"
-        >
-          {mounted && containerReady ? (
-          <MapContainer
-            center={center}
-            zoom={13}
-            style={{ height: '100%', width: '100%', zIndex: 0 }}
-            scrollWheelZoom={false}
-            zoomControl={false}
-            dragging={false}
-            doubleClickZoom={false}
-            boxZoom={false}
-            touchZoom={false}
-              key={`map-${logId}-${mounted}`}
-          >
-            <TileLayer
-              attribution=""
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            <GeoJSON
-              data={geoJsonData}
-              style={geoJsonStyle}
-              pointToLayer={pointToLayer}
-            />
-            <FitBounds geoJsonData={geoJsonData} />
-          </MapContainer>
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <span className="text-xs text-gray-500">Loading map...</span>
-            </div>
-          )}
-        </div>
-      );
-      };
-    });
-  },
-  { ssr: false }
-);
-
-// Map Component - dynamically imported to avoid SSR issues
-const MapComponent = dynamic(
-  () => {
-    return Promise.resolve().then(() => {
-      const React = require('react');
-      const L = require('leaflet');
-      const { MapContainer, TileLayer, GeoJSON, useMap } = require('react-leaflet');
-
-      // Fix for default marker icons in Next.js
-      if (typeof window !== 'undefined') {
-        delete (L.Icon.Default.prototype as any)._getIconUrl;
-        L.Icon.Default.mergeOptions({
-          iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-          iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-          shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-        });
-      }
-
-      const FitBounds = ({ geoJsonData }: { geoJsonData: any }) => {
-        const map = useMap();
-        React.useEffect(() => {
-          if (geoJsonData && map) {
-            try {
-              const geoJsonLayer = L.geoJSON(geoJsonData as any);
-              const bounds = geoJsonLayer.getBounds();
-              if (bounds.isValid()) {
-                map.fitBounds(bounds, { padding: [20, 20] });
-              }
-            } catch (err) {
-              console.error('Error fitting bounds:', err);
-            }
-          }
-        }, [geoJsonData, map]);
-        return null;
-      };
-
-      return ({ geoJsonData }: { geoJsonData: any }) => {
-        const [mounted, setMounted] = React.useState(false);
-
-        React.useEffect(() => {
-          setMounted(true);
-        }, []);
-
-        const geoJsonStyle = {
-          color: '#3388ff',
-          weight: 3,
-          opacity: 0.8,
-          fillOpacity: 0.2,
-        };
-
-        const pointToLayer = (feature: any, latlng: L.LatLng) => {
-          return L.circleMarker(latlng, {
-            radius: 6,
-            fillColor: '#3388ff',
-            color: '#fff',
-            weight: 2,
-            opacity: 1,
-            fillOpacity: 0.8,
-          });
-        };
-
-        const onEachFeature = (feature: any, layer: L.Layer) => {
-          if (feature.properties) {
-            const popupContent = Object.keys(feature.properties)
-              .map((key) => `<strong>${key}:</strong> ${feature.properties[key]}`)
-              .join('<br>');
-            layer.bindPopup(popupContent);
-          }
-        };
-
-        // Calculate center from GeoJSON if available
-        let center: [number, number] = [0, 0];
-        if (geoJsonData?.features?.[0]?.geometry?.coordinates) {
-          const coords = geoJsonData.features[0].geometry.coordinates;
-          if (geoJsonData.features[0].geometry.type === 'Point') {
-            center = [coords[1], coords[0]];
-          } else if (geoJsonData.features[0].geometry.type === 'LineString' && coords.length > 0) {
-            center = [coords[0][1], coords[0][0]];
-          }
-        }
-
-        if (!mounted) {
-          return (
-            <div className="w-full h-full flex items-center justify-center">
-              <span className="text-zinc-500">Loading map...</span>
-            </div>
-          );
-        }
-
-        return (
-          <div className="w-full h-full">
-            <MapContainer
-              center={center}
-              zoom={13}
-              style={{ height: '100%', width: '100%', zIndex: 0 }}
-              scrollWheelZoom={true}
-              key={`fullmap-${mounted}`}
-            >
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              {geoJsonData && (
-                <GeoJSON
-                  data={geoJsonData}
-                  style={geoJsonStyle}
-                  pointToLayer={pointToLayer}
-                  onEachFeature={onEachFeature}
-                />
-              )}
-              <FitBounds geoJsonData={geoJsonData} />
-            </MapContainer>
-          </div>
-        );
-      };
-    });
-  },
-  { ssr: false }
-);
-
-interface McapLog {
-  id: number;
-  recovery_status?: string;
-  parse_status?: string;
-  captured_at?: string;
-  duration_seconds?: number;
-  channel_count?: number;
-  channels?: string[];
-  channels_summary?: string[];
-  rough_point?: string;
-  cars?: string[];
-  drivers?: string[];
-  event_types?: string[];
-  locations?: string[];
-  notes?: string;
-  tags?: string[];
-  created_at?: string;
-  updated_at?: string;
-}
-
-const API_BASE_URL = 'http://127.0.0.1:8000';
-
-export default function Home() {
+  // ── Server data ──
   const [logs, setLogs] = useState<McapLog[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [processingLogIds, setProcessingLogIds] = useState<number[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10; // matches backend REST_FRAMEWORK['PAGE_SIZE']
-  const [selectedLog, setSelectedLog] = useState<McapLog | null>(null);
-  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [logToDelete, setLogToDelete] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState({
-    cars: [] as string[],
-    drivers: [] as string[],
-    event_types: [] as string[],
-    locations: [] as string[],
-    notes: '',
-    tags: [] as string[],
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // ── Lookups ──
+  const [lookups, setLookups] = useState({
+    cars: [] as string[], drivers: [] as string[],
+    eventTypes: [] as string[], locations: [] as string[],
+    tags: [] as string[], channels: [] as string[],
   });
-  const [editCarInput, setEditCarInput] = useState('');
-  const [editDriverInput, setEditDriverInput] = useState('');
-  const [editEventTypeInput, setEditEventTypeInput] = useState('');
-  const [editLocationInput, setEditLocationInput] = useState('');
-  const [editTagInput, setEditTagInput] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [loadingLog, setLoadingLog] = useState(false);
-  const [isMapModalOpen, setIsMapModalOpen] = useState(false);
-  const [geoJsonData, setGeoJsonData] = useState<any>(null);
-  const [loadingGeoJson, setLoadingGeoJson] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
-  const [downloading, setDownloading] = useState<number | null>(null);
-  const [selectedLogIds, setSelectedLogIds] = useState<number[]>([]);
-  const [isDownloadDialogOpen, setIsDownloadDialogOpen] = useState(false);
-  const [downloadFormat, setDownloadFormat] = useState<'mcap' | 'csv_omni' | 'csv_tvn' | 'ld'>('mcap');
-  const [bulkDownloading, setBulkDownloading] = useState(false);
-  const [bulkDownloadError, setBulkDownloadError] = useState<string | null>(null);
-  const [downloadCompleteMessage, setDownloadCompleteMessage] = useState<string | null>(null);
-  const [carNames, setCarNames] = useState<string[]>([]);
-  const [driverNames, setDriverNames] = useState<string[]>([]);
-  const [eventTypeNames, setEventTypeNames] = useState<string[]>([]);
-  const [locationNames, setLocationNames] = useState<string[]>([]);
-  // Filter state for list
-  const [filterStartDate, setFilterStartDate] = useState('');
-  const [filterEndDate, setFilterEndDate] = useState('');
-  const [filterCar, setFilterCar] = useState('');
-  const [filterEventType, setFilterEventType] = useState('');
-  const [filterDriver, setFilterDriver] = useState('');
-  const [filterLocation, setFilterLocation] = useState('');
-  const [filterChannel, setFilterChannel] = useState('');
-  const [filterTag, setFilterTag] = useState('');
-  const [tagNames, setTagNames] = useState<string[]>([]);
-  const [channelNames, setChannelNames] = useState<string[]>([]);
+
+  // ── DB indicator ──
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
 
-  // Play a short chime (Web Audio API) when download completes
-  const playChime = () => {
-    try {
-      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-      const playTone = (frequency: number, startTime: number, duration: number) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.value = frequency;
-        osc.type = 'sine';
-        gain.gain.setValueAtTime(0.15, startTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
-        osc.start(startTime);
-        osc.stop(startTime + duration);
-      };
-      playTone(523.25, 0, 0.12);
-      playTone(659.25, 0.14, 0.2);
-    } catch {
-      // ignore if AudioContext not supported or blocked
-    }
-  };
+  // ── Selection ──
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [processingIds, setProcessingIds] = useState<number[]>([]);
 
-  const normalizeStringList = (values: unknown): string[] => {
-    if (!Array.isArray(values)) return [];
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const value of values) {
-      if (typeof value !== 'string') continue;
-      const item = value.trim();
-      if (!item) continue;
-      const key = item.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(item);
-    }
-    return out;
-  };
+  // ── Modals ──
+  const [viewLog, setViewLog] = useState<McapLog | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewLoading, setViewLoading] = useState(false);
 
-  // Fetch distinct values for filter dropdowns
-  const fetchLookups = async () => {
-    try {
-      // Fetch distinct names for free-form fields and filter dropdowns
-      try {
-        const [carRes, driverRes, eventRes, locationRes, tagRes, channelRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/mcap-logs/car-names/`),
-          fetch(`${API_BASE_URL}/mcap-logs/driver-names/`),
-          fetch(`${API_BASE_URL}/mcap-logs/event-type-names/`),
-          fetch(`${API_BASE_URL}/mcap-logs/location-names/`),
-          fetch(`${API_BASE_URL}/mcap-logs/tag-names/`),
-          fetch(`${API_BASE_URL}/mcap-logs/channel-names/`),
-        ]);
-        if (carRes.ok) {
-          const names = await carRes.json();
-          setCarNames(normalizeStringList(names));
-        }
-        if (driverRes.ok) {
-          const names = await driverRes.json();
-          setDriverNames(normalizeStringList(names));
-        }
-        if (eventRes.ok) {
-          const names = await eventRes.json();
-          setEventTypeNames(normalizeStringList(names));
-        }
-        if (locationRes.ok) {
-          const names = await locationRes.json();
-          setLocationNames(normalizeStringList(names));
-        }
-        if (tagRes.ok) {
-          const names = await tagRes.json();
-          setTagNames(normalizeStringList(names));
-        }
-        if (channelRes.ok) {
-          const names = await channelRes.json();
-          setChannelNames(normalizeStringList(names));
-        }
-      } catch (err) {
-        console.warn('Failed to fetch lookup names:', err);
-      }
-    } catch (err) {
-      console.error('Error fetching lookups:', err);
-    }
-  };
+  const [editLog, setEditLog] = useState<McapLog | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const checkDatabaseStatus = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/?page=1`);
-      if (!response.ok) {
-        throw new Error(`Backend returned ${response.status}`);
-      }
-      setDbStatus('connected');
-    } catch (err) {
-      setDbStatus('disconnected');
-      console.error('Database status check failed:', err);
-    }
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteIds, setDeleteIds] = useState<number[]>([]);
+  const [deleting, setDeleting] = useState(false);
+
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloadFormat, setDownloadFormat] = useState<DownloadFormat>('mcap');
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const [mapOpen, setMapOpen] = useState(false);
+  const [mapLogId, setMapLogId] = useState<number | null>(null);
+  const [geoJsonData, setGeoJsonData] = useState<any>(null);
+
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // ── Toast helper ──
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 4000);
   }, []);
 
-  // Fetch logs from the API (paginated; server-side search and filters)
-  const fetchLogs = async (page: number = currentPage) => {
+  // ── Chime ──
+  const playChime = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const tone = (freq: number, start: number, dur: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = freq; osc.type = 'sine';
+        gain.gain.setValueAtTime(0.14, start);
+        gain.gain.exponentialRampToValueAtTime(0.01, start + dur);
+        osc.start(start); osc.stop(start + dur);
+      };
+      tone(523.25, 0, 0.12); tone(659.25, 0.14, 0.2);
+    } catch { }
+  };
+
+  // ── Load logs whenever URL params change ──
+  const loadLogs = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      params.set('page', String(page));
-      if (debouncedSearchQuery.trim()) params.set('search', debouncedSearchQuery.trim());
-      if (filterStartDate.trim()) params.set('start_date', filterStartDate.trim());
-      if (filterEndDate.trim()) params.set('end_date', filterEndDate.trim());
-      if (filterCar.trim()) params.set('car', filterCar.trim());
-      if (filterEventType.trim()) params.set('event_type', filterEventType.trim());
-      if (filterDriver.trim()) params.set('driver', filterDriver.trim());
-      if (filterLocation.trim()) params.set('location', filterLocation.trim());
-      if (filterChannel.trim()) params.set('channel', filterChannel.trim());
-      if (filterTag.trim()) params.set('tag', filterTag.trim());
-
-      const url = `${API_BASE_URL}/mcap-logs/?${params.toString()}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch logs: ${response.statusText}`);
-      }
-      const data = await response.json();
-
-      if (Array.isArray(data)) {
-        setLogs(data);
-        setTotalCount(data.length);
-      } else if (data?.results) {
-        setLogs(data.results);
-        setTotalCount(typeof data.count === 'number' ? data.count : data.results.length);
-      } else {
-        setLogs([]);
-        setTotalCount(0);
-      }
+      const { logs: data, total } = await fetchLogs(filters);
+      setLogs(data);
+      setTotalCount(total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch logs');
-      console.error('Error fetching logs:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load logs');
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.toString()]);
 
-  const clearFilters = () => {
-    setFilterStartDate('');
-    setFilterEndDate('');
-    setFilterCar('');
-    setFilterEventType('');
-    setFilterDriver('');
-    setFilterLocation('');
-    setFilterChannel('');
-    setFilterTag('');
-    setCurrentPage(1);
-  };
+  useEffect(() => { loadLogs(); }, [loadLogs]);
 
-  const removeSelectedFileAtIndex = (index: number) => {
-    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
-  };
+  // ── Load lookups + DB status on mount ──
+  useEffect(() => {
+    fetchLookups().then(setLookups);
+  }, []);
 
-  const clearSelectedFiles = () => setSelectedFiles([]);
+  useEffect(() => {
+    const run = async () => {
+      const ok = await checkDbStatus();
+      setDbStatus(ok ? 'connected' : 'disconnected');
+    };
+    run();
+    const interval = setInterval(run, 15_000);
+    return () => clearInterval(interval);
+  }, []);
 
-  // Upload file(s)
-  const handleUpload = async () => {
-    if (selectedFiles.length === 0) {
-      setError('Please select one or more .mcap files first');
-      return;
-    }
-
-    setUploading(true);
-    setError(null);
-
-    try {
-      const formData = new FormData();
-      for (const file of selectedFiles) {
-        formData.append('files', file);
-      }
-
-      // Always use batch upload endpoint (works for 1+ files)
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/batch-upload/`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.detail || errorData.message || `Upload failed: ${response.statusText}`
-        );
-      }
-
-      // Capture created log IDs so we can show a simple processing indicator
-      const payload = await response.json().catch(() => null);
-      const createdIds: number[] =
-        payload?.results?.map((r: any) => r?.id).filter((id: any) => typeof id === 'number') ?? [];
-
-      if (createdIds.length > 0) {
-        setProcessingLogIds((prev) => Array.from(new Set([...prev, ...createdIds])));
-      }
-
-      // Clear selection and refresh logs (newest logs are on page 1)
-      setSelectedLogIds([]);
-      setSelectedFiles([]);
-      setCurrentPage(1);
-      await fetchLogs(1);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to upload file');
-      console.error('Error uploading file:', err);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  // Handle file selection (multiple)
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    if (files.length === 0) return;
-
-    const mcapFiles = files.filter((f) => f.name.toLowerCase().endsWith('.mcap'));
-    if (mcapFiles.length !== files.length) {
-      setError('Some files were ignored. Only .mcap files can be uploaded.');
-    } else {
-      setError(null);
-    }
-
-    setSelectedFiles(mcapFiles);
-
-    // Allow selecting the same files again
-    e.currentTarget.value = '';
-  };
-
-  // Fetch a specific log by ID
-  const fetchLog = async (id: number) => {
-    setLoadingLog(true);
-    setError(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch log: ${response.statusText}`);
-      }
-      const data = await response.json();
-      return data;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch log');
-      console.error('Error fetching log:', err);
-      throw err;
-    } finally {
-      setLoadingLog(false);
-    }
-  };
-
-  // View log details
-  const handleViewLog = async (id: number) => {
-    try {
-      const log = await fetchLog(id);
-      setSelectedLog(log);
-      setIsViewModalOpen(true);
-    } catch (err) {
-      // Error already handled in fetchLog
-    }
-  };
-
-  const getLogCars = (log: McapLog) => normalizeStringList(log.cars);
-  const getLogDrivers = (log: McapLog) => normalizeStringList(log.drivers);
-  const getLogEventTypes = (log: McapLog) => normalizeStringList(log.event_types);
-  const getLogLocations = (log: McapLog) => normalizeStringList(log.locations);
-
-  // Open edit modal
-  const handleEditLog = async (id: number) => {
-    try {
-      const log = await fetchLog(id);
-      setSelectedLog(log);
-
-      setEditForm({
-        cars: getLogCars(log),
-        drivers: getLogDrivers(log),
-        event_types: getLogEventTypes(log),
-        locations: getLogLocations(log),
-        notes: log.notes || '',
-        tags: normalizeStringList(log.tags),
-      });
-      setEditCarInput('');
-      setEditDriverInput('');
-      setEditEventTypeInput('');
-      setEditLocationInput('');
-      setEditTagInput('');
-      setIsEditModalOpen(true);
-    } catch (err) {
-      // Error already handled in fetchLog
-    }
-  };
-
-  // Update log (PATCH or PUT)
-  const handleUpdateLog = async (id: number, usePut = false) => {
-    setSaving(true);
-    setError(null);
-
-    try {
-      const method = usePut ? 'PUT' : 'PATCH';
-      
-      // Build request body with free-form JSON arrays
-      const body: any = {
-        notes: editForm.notes || '',
-        tags: normalizeStringList(editForm.tags),
-        cars: normalizeStringList(editForm.cars),
-        drivers: normalizeStringList(editForm.drivers),
-        event_types: normalizeStringList(editForm.event_types),
-        locations: normalizeStringList(editForm.locations),
-      };
-
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        let errorMessage = `Update failed: ${response.statusText}`;
-        try {
-          const errorData = await response.json();
-          console.error('Update error response:', errorData);
-          // Handle different error response formats
-          if (errorData.detail) {
-            errorMessage = errorData.detail;
-          } else if (errorData.message) {
-            errorMessage = errorData.message;
-          } else if (typeof errorData === 'object') {
-            // Handle field-specific errors
-            const fieldErrors = Object.entries(errorData)
-              .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
-              .join('; ');
-            if (fieldErrors) {
-              errorMessage = fieldErrors;
-            }
-          }
-        } catch (parseError) {
-          // If JSON parsing fails, use the status text
-          console.error('Error parsing error response:', parseError);
-        }
-        throw new Error(errorMessage);
-      }
-
-      // Get the updated log data
-      const updatedData = await response.json();
-
-      // Optimistically update the logs state with the response data
-      setLogs((prevLogs) =>
-        prevLogs.map((log) =>
-          log.id === id
-            ? {
-                ...log,
-                cars: normalizeStringList(updatedData.cars),
-                drivers: normalizeStringList(updatedData.drivers),
-                event_types: normalizeStringList(updatedData.event_types),
-                locations: normalizeStringList(updatedData.locations),
-                notes: updatedData.notes ?? log.notes,
-                tags: normalizeStringList(updatedData.tags ?? log.tags),
-              }
-            : log
-        )
+  // ── Poll processing IDs ──
+  useEffect(() => {
+    if (!processingIds.length) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      const results = await Promise.all(
+        processingIds.map(async (id) => {
+          try {
+            const log = await fetchLog(id);
+            return { id, log };
+          } catch { return { id, log: null }; }
+        }),
       );
+      if (cancelled) return;
+      setLogs((prev) => {
+        const byId = new Map(results.filter((r) => r.log).map((r) => [r.id, r.log!]));
+        return prev.map((l) => byId.has(l.id) ? { ...l, ...byId.get(l.id) } : l);
+      });
+      const isTerminal = (s?: string) => {
+        const v = s?.toLowerCase();
+        return v === 'completed' || v === 'success' || v?.startsWith('error');
+      };
+      setProcessingIds((prev) =>
+        prev.filter((id) => {
+          const found = results.find((r) => r.id === id)?.log;
+          return !found || !(isTerminal(found.recovery_status) && isTerminal(found.parse_status));
+        }),
+      );
+    }, 2500);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [processingIds]);
 
-      // Refresh lookup names in case new values were added
-      await fetchLookups();
+  // ── Page navigation via URL ──
+  const goToPage = (page: number) => {
+    const next = new URLSearchParams(params.toString());
+    next.set('page', String(Math.max(1, Math.min(page, totalPages))));
+    setSelectedIds([]);
+    router.push(`?${next.toString()}`, { scroll: false });
+  };
 
-      setIsEditModalOpen(false);
-      setSelectedLog(null);
-      await fetchLogs(currentPage);
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  // ── Selection ──
+  const toggleSelect = (id: number) =>
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const toggleAll = () => {
+    const allIds = logs.map((l) => l.id);
+    const all = allIds.every((id) => selectedIds.includes(id)) && allIds.length > 0;
+    setSelectedIds(all ? selectedIds.filter((id) => !allIds.includes(id)) : [...new Set([...selectedIds, ...allIds])]);
+  };
+
+  // ── View ──
+  const openView = async (id: number) => {
+    setViewOpen(true);
+    setViewLoading(true);
+    try {
+      const log = await fetchLog(id);
+      setViewLog(log);
+    } finally {
+      setViewLoading(false);
+    }
+  };
+
+  // ── Edit ──
+  const openEdit = async (id: number) => {
+    const log = await fetchLog(id);
+    setEditLog(log);
+    setEditOpen(true);
+  };
+
+  const handleSave = async (form: {
+    cars: string[]; drivers: string[]; event_types: string[];
+    locations: string[]; notes: string; tags: string[];
+  }) => {
+    if (!editLog) return;
+    setSaving(true);
+    try {
+      await updateLog(editLog.id, form);
+      setEditOpen(false);
+      setEditLog(null);
+      showToast('Log updated');
+      loadLogs();
+      fetchLookups().then(setLookups);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update log');
-      console.error('Error updating log:', err);
+      setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
       setSaving(false);
     }
   };
 
-  // Delete log
-  const handleDeleteLog = async (id: number) => {
+  // ── Delete (selection-driven) ──
+  const openDelete = () => {
+    if (!selectedIds.length) return;
+    setDeleteIds([...selectedIds]);
+    setDeleteOpen(true);
+  };
+
+  const handleDelete = async () => {
     setDeleting(true);
-    setError(null);
-
     try {
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`, {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.detail || errorData.message || `Delete failed: ${response.statusText}`
-        );
-      }
-
-      setIsDeleteModalOpen(false);
-      setLogToDelete(null);
-      await fetchLogs(currentPage);
+      await deleteLogs(deleteIds);
+      setDeleteOpen(false);
+      setSelectedIds([]);
+      showToast(`Deleted ${deleteIds.length} log${deleteIds.length !== 1 ? 's' : ''}`);
+      loadLogs();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete log');
-      console.error('Error deleting log:', err);
+      setError(err instanceof Error ? err.message : 'Delete failed');
     } finally {
       setDeleting(false);
     }
   };
 
-  // Open delete confirmation
-  const openDeleteConfirm = (id: number) => {
-    setLogToDelete(id);
-    setIsDeleteModalOpen(true);
+  // ── Download ──
+  const openDownload = () => {
+    if (!selectedIds.length) return;
+    setDownloadError(null);
+    setDownloadOpen(true);
   };
 
-  // Fetch GeoJSON for a log
-  const fetchGeoJson = async (id: number) => {
-    setLoadingGeoJson(true);
-    setError(null);
+  const handleDownload = async () => {
+    setDownloading(true);
+    setDownloadError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/${id}/geojson`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch GeoJSON: ${response.statusText}`);
-      }
-      const data = await response.json();
-      setGeoJsonData(data);
-      setIsMapModalOpen(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch GeoJSON');
-      console.error('Error fetching GeoJSON:', err);
-    } finally {
-      setLoadingGeoJson(false);
-    }
-  };
-
-  // Download MCAP file
-  const handleDownload = async (id: number) => {
-    setDownloading(id);
-    setError(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/${id}/download`);
-      if (!response.ok) {
-        throw new Error(`Failed to download file: ${response.statusText}`);
-      }
-      
-      // Get filename from Content-Disposition header or use default
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = `mcap-log-${id}.mcap`;
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i);
-        if (filenameMatch) {
-          filename = filenameMatch[1];
-        }
-      }
-
-      // Create blob and download
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to download file');
-      console.error('Error downloading file:', err);
-    } finally {
-      setDownloading(null);
-    }
-  };
-
-  // Debounce search and fetch server-side results (search across ALL logs)
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
-    return () => clearTimeout(t);
-  }, [searchQuery]);
-
-  useEffect(() => {
-    setSelectedLogIds([]);
-    setCurrentPage(1);
-    fetchLogs(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearchQuery, filterStartDate, filterEndDate, filterCar, filterEventType, filterDriver, filterLocation, filterChannel, filterTag]);
-
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-
-  const goToPage = (page: number) => {
-    const nextPage = Math.min(Math.max(1, page), totalPages);
-    setSelectedLogIds([]);
-    setCurrentPage(nextPage);
-    fetchLogs(nextPage);
-  };
-
-  const terminalStatus = (s?: string) => {
-    if (!s) return false;
-    const v = s.toLowerCase();
-    return v === 'completed' || v === 'success' || v.startsWith('error');
-  };
-
-  // Poll for status updates while uploads are processing
-  useEffect(() => {
-    if (processingLogIds.length === 0) return;
-
-    let cancelled = false;
-    const interval = setInterval(async () => {
-      try {
-        const ids = processingLogIds.slice();
-        if (ids.length === 0) return;
-
-        const results = await Promise.all(
-          ids.map(async (id) => {
-            const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`);
-            if (!res.ok) return { id, log: null };
-            const log = await res.json();
-            return { id, log };
-          })
-        );
-
-        if (cancelled) return;
-
-        // Update visible rows in-place if they’re on the current page
-        setLogs((prev) => {
-          const byId = new Map(results.filter((r) => r.log).map((r) => [r.id, r.log]));
-          return prev.map((l) => (byId.has(l.id) ? { ...l, ...byId.get(l.id) } : l));
-        });
-
-        // Remove finished IDs
-        setProcessingLogIds((prev) =>
-          prev.filter((id) => {
-            const found = results.find((r) => r.id === id)?.log;
-            if (!found) return true;
-            return !(terminalStatus(found.recovery_status) && terminalStatus(found.parse_status));
-          })
-        );
-      } catch (_) {
-        // Keep polling; transient errors are fine
-      }
-    }, 2500);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [processingLogIds]);
-
-  // Selection helpers
-  const toggleSelectLog = (id: number) => {
-    setSelectedLogIds((prev) =>
-      prev.includes(id) ? prev.filter((logId) => logId !== id) : [...prev, id]
-    );
-  };
-
-  const toggleSelectAll = () => {
-    const allIds = logs.map((log) => log.id);
-    const allSelected = allIds.every((id) => selectedLogIds.includes(id)) && allIds.length > 0;
-    if (allSelected) {
-      setSelectedLogIds((prev) => prev.filter((id) => !allIds.includes(id)));
-    } else {
-      setSelectedLogIds((prev) => Array.from(new Set([...prev, ...allIds])));
-    }
-  };
-
-  const openDownloadDialog = () => {
-    if (selectedLogIds.length === 0) {
-      setError('Select at least one log to download');
-      return;
-    }
-    setBulkDownloadError(null);
-    setIsDownloadDialogOpen(true);
-  };
-
-  const handleBulkDownload = async () => {
-    if (selectedLogIds.length === 0) {
-      setBulkDownloadError('Select at least one log to download');
-      return;
-    }
-    setBulkDownloading(true);
-    setBulkDownloadError(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/mcap-logs/download/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: selectedLogIds, format: downloadFormat }),
-      });
-
-      if (!response.ok) {
-        let message = `Failed to download files: ${response.statusText}`;
-        try {
-          const data = await response.json();
-          message = data.error || message;
-        } catch (_) {
-          // ignore json errors
-        }
-        throw new Error(message);
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const filename = `mcap_logs_${downloadFormat}.zip`;
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      await bulkDownload(selectedIds, downloadFormat);
+      setDownloadOpen(false);
       playChime();
-      setDownloadCompleteMessage('Download complete!');
-      setIsDownloadDialogOpen(false);
+      showToast('Download complete!');
     } catch (err) {
-      setBulkDownloadError(err instanceof Error ? err.message : 'Failed to download files');
-      console.error('Error downloading files:', err);
+      setDownloadError(err instanceof Error ? err.message : 'Download failed');
     } finally {
-      setBulkDownloading(false);
+      setDownloading(false);
     }
   };
 
-  // Fetch logs and lookups on component mount
-  useEffect(() => {
-    fetchLookups();
-    fetchLogs(1);
-  }, []);
+  // ── Map ──
+  const openMap = async (id: number) => {
+    try {
+      const data = await fetchGeoJson(id);
+      setGeoJsonData(data);
+      setMapLogId(id);
+      setMapOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load map');
+    }
+  };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const runCheck = async () => {
-      if (cancelled) return;
-      await checkDatabaseStatus();
-    };
-
-    runCheck();
-    const interval = setInterval(runCheck, 15000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [checkDatabaseStatus]);
-
-  // Auto-dismiss download complete toast after 4 seconds
-  useEffect(() => {
-    if (!downloadCompleteMessage) return;
-    const t = setTimeout(() => setDownloadCompleteMessage(null), 4000);
-    return () => clearTimeout(t);
-  }, [downloadCompleteMessage]);
-
+  // ══════════════════════════════
+  //  RENDER
+  // ══════════════════════════════
   return (
-    <div className="min-h-screen bg-white py-8 px-4 sm:px-8">
-      <div className="fixed top-4 right-4 z-50" title={`Database: ${dbStatus}`} aria-label={`Database status: ${dbStatus}`}>
+    <div className="min-h-screen py-8 px-4 sm:px-8">
+      {/* DB status indicator */}
+      <div
+        className="fixed top-4 right-4 z-50 flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
+        style={{
+          background: 'rgba(232,224,212,0.92)',
+          border: '1px solid rgba(42,38,34,0.2)',
+          color: 'var(--sienna)',
+          backdropFilter: 'blur(4px)',
+        }}
+        title={`Database: ${dbStatus}`}
+      >
         <span
-          className={`block h-3 w-3 rounded-full ${
-            dbStatus === 'connected'
-              ? 'bg-green-500'
-              : dbStatus === 'disconnected'
-              ? 'bg-red-500'
-              : 'bg-amber-400'
-          }`}
+          className={`block h-2 w-2 rounded-full ${dbStatus === 'connected' ? 'bg-green-500' :
+            dbStatus === 'disconnected' ? 'bg-red-500' : 'bg-amber-400'
+            }`}
         />
+        {dbStatus}
       </div>
 
-      {/* Download complete toast */}
-      {downloadCompleteMessage && (
+      {/* Toast */}
+      {toastMsg && (
         <div
-          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-900 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-300"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium shadow-lg"
           role="status"
-          aria-live="polite"
+          style={{
+            background: 'var(--parchment)',
+            border: '1px solid rgba(46,107,62,0.3)',
+            color: 'var(--success)',
+            boxShadow: '0 4px 20px rgba(42,38,34,0.2)',
+          }}
         >
           <span className="inline-flex h-2 w-2 rounded-full bg-green-500" />
-          {downloadCompleteMessage}
+          {toastMsg}
         </div>
       )}
 
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-4xl font-bold text-gray-900 mb-8">
-          MCAP Log Manager
-        </h1>
-
-        {/* Upload Section */}
-        <Card className="mb-8 bg-white border border-gray-200 shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-gray-900">Upload MCAP Files</CardTitle>
-          </CardHeader>
-          <CardContent>
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-              <label className="cursor-pointer">
-              <input
-                type="file"
-                accept=".mcap"
-                multiple
-                onChange={handleFileChange}
-                className="hidden"
-                disabled={uploading}
-              />
-                <Button variant="outline" className="cursor-pointer border-gray-300 text-gray-700 hover:bg-gray-50" asChild>
-              <span>Select MCAP Files</span>
-                </Button>
-            </label>
-
-            {selectedFiles.length > 0 && (
-              <div className="flex-1">
-                <p className="text-sm text-gray-600">
-                  Selected: <span className="font-medium text-gray-900">{selectedFiles.length}</span> file{selectedFiles.length === 1 ? '' : 's'}
-                </p>
-                <p className="text-xs text-gray-500">
-                  Total size:{' '}
-                  {(selectedFiles.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024).toFixed(2)} MB
-                </p>
-                <div className="mt-2 space-y-1">
-                  {selectedFiles.slice(0, 5).map((file, idx) => (
-                    <div key={`${file.name}-${file.size}-${idx}`} className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-gray-700 truncate">{file.name}</span>
-                      <button
-                        type="button"
-                        className="text-xs text-purple-700 hover:text-purple-900"
-                        onClick={() => removeSelectedFileAtIndex(idx)}
-                        disabled={uploading}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  {selectedFiles.length > 5 && (
-                    <div className="text-xs text-gray-500">
-                      + {selectedFiles.length - 5} more…
-                    </div>
-                  )}
-                </div>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className="text-xs text-gray-600 hover:text-gray-900"
-                    onClick={clearSelectedFiles}
-                    disabled={uploading}
-                  >
-                    Clear selection
-                  </button>
-                </div>
-              </div>
-            )}
-
-              <Button
-              onClick={handleUpload}
-              disabled={selectedFiles.length === 0 || uploading}
-                className="bg-purple-600 hover:bg-purple-700 text-white"
-            >
-              {uploading ? 'Uploading...' : 'Upload'}
-              </Button>
-          </div>
-
-          {processingLogIds.length > 0 && (
-            <div className="mt-4 rounded-md border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-900">
-              Processing {processingLogIds.length} file{processingLogIds.length === 1 ? '' : 's'}…
-              <span className="ml-2 text-purple-700">(recovery/parse running)</span>
-            </div>
-          )}
-
-          {error && (
-              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-red-600">{error}</p>
-            </div>
-          )}
-          </CardContent>
-        </Card>
-
-        {/* Logs Display Section */}
-        <Card className="bg-white border border-gray-200 shadow-sm">
-          <CardHeader>
-              <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-3">
-                <CardTitle className="text-gray-900">MCAP Logs</CardTitle>
-                {selectedLogIds.length > 0 && (
-                  <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800 border border-purple-200">
-                    {selectedLogIds.length} {selectedLogIds.length === 1 ? 'file' : 'files'} selected
-                  </span>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  onClick={openDownloadDialog}
-                  disabled={selectedLogIds.length === 0}
-                  className="bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Download Selected
-                  {selectedLogIds.length > 0 && (
-                    <span className="ml-2 inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-500 text-xs font-semibold">
-                      {selectedLogIds.length}
-                    </span>
-                  )}
-                </Button>
-                <Button
-                  onClick={() => fetchLogs(currentPage)}
-                  disabled={loading}
-                  variant="outline"
-                  className="border-gray-300 text-gray-700 hover:bg-gray-50"
-                >
-                  {loading ? 'Refreshing...' : 'Refresh'}
-                </Button>
-              </div>
-          </div>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <Input
-                  type="text"
-                  placeholder="Search logs by ID, car, driver, event type, notes..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 bg-white border-gray-300"
-                />
-              </div>
-            </div>
-            <div className="flex flex-wrap items-end gap-2 mt-3">
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">From</Label>
-                <Input
-                  type="date"
-                  value={filterStartDate}
-                  onChange={(e) => { setFilterStartDate(e.target.value); setCurrentPage(1); }}
-                  className="w-[130px] bg-white border-gray-300"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">To</Label>
-                <Input
-                  type="date"
-                  value={filterEndDate}
-                  onChange={(e) => { setFilterEndDate(e.target.value); setCurrentPage(1); }}
-                  className="w-[130px] bg-white border-gray-300"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">Car</Label>
-                <Select value={filterCar || 'all'} onValueChange={(v) => { setFilterCar(v === 'all' ? '' : v); setCurrentPage(1); }}>
-                  <SelectTrigger className="w-[140px] bg-white border-gray-300">
-                    <SelectValue placeholder="All" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    {carNames.map((name) => (
-                      <SelectItem key={name} value={name}>{name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">Event type</Label>
-                <Select value={filterEventType || 'all'} onValueChange={(v) => { setFilterEventType(v === 'all' ? '' : v); setCurrentPage(1); }}>
-                  <SelectTrigger className="w-[140px] bg-white border-gray-300">
-                    <SelectValue placeholder="All" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    {eventTypeNames.map((name) => (
-                      <SelectItem key={name} value={name}>{name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">Driver</Label>
-                <Select value={filterDriver || 'all'} onValueChange={(v) => { setFilterDriver(v === 'all' ? '' : v); setCurrentPage(1); }}>
-                  <SelectTrigger className="w-[140px] bg-white border-gray-300">
-                    <SelectValue placeholder="All" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    {driverNames.map((name) => (
-                      <SelectItem key={name} value={name}>{name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">Tag</Label>
-                <Select value={filterTag || 'all'} onValueChange={(v) => { setFilterTag(v === 'all' ? '' : v); setCurrentPage(1); }}>
-                  <SelectTrigger className="w-[160px] bg-white border-gray-300">
-                    <SelectValue placeholder="All" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    {tagNames.map((t) => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">Channel</Label>
-                <Select value={filterChannel || 'all'} onValueChange={(v) => { setFilterChannel(v === 'all' ? '' : v); setCurrentPage(1); }}>
-                  <SelectTrigger className="w-[180px] bg-white border-gray-300">
-                    <SelectValue placeholder="All" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    {channelNames.map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">Location</Label>
-                <Select value={filterLocation || 'all'} onValueChange={(v) => { setFilterLocation(v === 'all' ? '' : v); setCurrentPage(1); }}>
-                  <SelectTrigger className="w-[200px] bg-white border-gray-300">
-                    <SelectValue placeholder="All" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    {locationNames.map((name) => (
-                      <SelectItem key={name} value={name}>{name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="border-gray-300 text-gray-700"
-                onClick={() => clearFilters()}
-              >
-                Clear filters
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-
-          {loading && logs.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-gray-600">Loading logs...</p>
-            </div>
-          ) : logs.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-gray-600">
-                {searchQuery ? `No logs found matching "${searchQuery}"` : 'No logs found. Upload a file to get started.'}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full table-clean">
-                <thead>
-                  <tr>
-                    <th className="py-3 px-2 w-10">
-                      <input
-                        type="checkbox"
-                        aria-label="Select all"
-                        checked={
-                          logs.length > 0 &&
-                          logs.every((log) => selectedLogIds.includes(log.id))
-                        }
-                        onChange={toggleSelectAll}
-                      />
-                    </th>
-                    <th>ID</th>
-                    <th>Map Preview</th>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Duration</th>
-                    <th>Channels</th>
-                    <th>Status</th>
-                    <th>Car</th>
-                    <th>Driver</th>
-                    <th>Event</th>
-                    <th>Tags</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((log) => (
-                    <tr
-                      key={log.id}
-                      className="hover:bg-gray-50 transition-colors"
-                    >
-                      <td className="py-3 px-2">
-                        <input
-                          type="checkbox"
-                          aria-label={`Select log ${log.id}`}
-                          checked={selectedLogIds.includes(log.id)}
-                          onChange={() => toggleSelectLog(log.id)}
-                          className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                        />
-                      </td>
-                      <td className="text-sm text-gray-900 font-medium">{log.id}</td>
-                      <td>
-                        <MapPreview 
-                          logId={log.id} 
-                          apiBaseUrl={API_BASE_URL} 
-                          onMapClick={fetchGeoJson}
-                        />
-                      </td>
-                      <td className="text-sm text-gray-700">
-                        {log.captured_at
-                          ? new Date(log.captured_at).toLocaleDateString()
-                          : 'N/A'}
-                      </td>
-                      <td className="text-sm text-gray-700">
-                        {log.captured_at
-                          ? new Date(log.captured_at).toLocaleTimeString()
-                          : 'N/A'}
-                      </td>
-                      <td className="text-sm text-gray-700">
-                        {log.duration_seconds
-                          ? `${log.duration_seconds.toFixed(1)}s`
-                          : 'N/A'}
-                      </td>
-                      <td className="text-sm text-gray-700">
-                        {log.channel_count ?? 'N/A'}
-                      </td>
-                      <td>
-                        <div className="flex flex-col gap-1">
-                          {log.recovery_status && (
-                            <span
-                              className={`inline-block px-2 py-1 rounded text-xs ${
-                                log.recovery_status === 'completed' || log.recovery_status === 'success'
-                                  ? 'bg-green-100 text-green-800'
-                                  : log.recovery_status === 'pending'
-                                  ? 'bg-yellow-100 text-yellow-800'
-                                  : 'bg-red-100 text-red-800'
-                              }`}
-                            >
-                              Recovery: {log.recovery_status}
-                            </span>
-                          )}
-                          {log.parse_status && (
-                            <span
-                              className={`inline-block px-2 py-1 rounded text-xs ${
-                                log.parse_status === 'completed' || log.parse_status === 'success'
-                                  ? 'bg-green-100 text-green-800'
-                                  : log.parse_status === 'pending'
-                                  ? 'bg-yellow-100 text-yellow-800'
-                                  : log.parse_status?.startsWith('error')
-                                  ? 'bg-red-100 text-red-800'
-                                  : 'bg-blue-100 text-blue-800'
-                              }`}
-                            >
-                              Parse: {log.parse_status}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="text-sm text-gray-700">
-                        {getLogCars(log).join(', ') || 'N/A'}
-                      </td>
-                      <td className="text-sm text-gray-700">
-                        {getLogDrivers(log).join(', ') || 'N/A'}
-                      </td>
-                      <td className="text-sm text-gray-700">
-                        {getLogEventTypes(log).join(', ') || 'N/A'}
-                      </td>
-                      <td className="text-sm text-gray-700 max-w-[180px]">
-                        {log.tags && log.tags.length > 0 ? (
-                          <span className="flex flex-wrap gap-1">
-                            {log.tags.map((t) => (
-                              <span key={t} className="inline-flex px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 text-xs border border-gray-200">
-                                {t}
-                              </span>
-                            ))}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td>
-                        <div className="flex gap-2 flex-wrap">
-                          <Button
-                            onClick={() => handleViewLog(log.id)}
-                            size="sm"
-                            className="text-xs bg-purple-600 hover:bg-purple-700 text-white"
-                          >
-                            View
-                          </Button>
-                          <Button
-                            onClick={() => fetchGeoJson(log.id)}
-                            disabled={loadingGeoJson}
-                            size="sm"
-                            className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300"
-                          >
-                            Map
-                          </Button>
-                          <Button
-                            onClick={() => handleDownload(log.id)}
-                            disabled={downloading === log.id}
-                            size="sm"
-                            className="text-xs border border-gray-300 text-gray-700 hover:bg-gray-50"
-                            title="Download MCAP file"
-                          >
-                            <Download className="h-3 w-3 mr-1" />
-                            {downloading === log.id ? 'Downloading...' : 'Download'}
-                          </Button>
-                          <Button
-                            onClick={() => handleEditLog(log.id)}
-                            size="sm"
-                            className="text-xs bg-green-600 hover:bg-green-700 text-white"
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            onClick={() => openDeleteConfirm(log.id)}
-                            size="sm"
-                            className="text-xs bg-red-600 hover:bg-red-700 text-white"
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              {/* Pagination */}
-              <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <div className="text-sm text-gray-600">
-                  Page <span className="font-medium text-gray-900">{currentPage}</span> of{' '}
-                  <span className="font-medium text-gray-900">{totalPages}</span> •{' '}
-                  <span className="font-medium text-gray-900">{totalCount}</span> total logs
-                </div>
-                <div className="flex items-center gap-1 flex-wrap justify-end">
-                  <Button
-                    variant="outline"
-                    className="border-gray-300 text-gray-700 hover:bg-gray-50"
-                    disabled={currentPage <= 1 || loading}
-                    onClick={() => goToPage(currentPage - 1)}
-                  >
-                    Prev
-                  </Button>
-
-                  {(() => {
-                    const pages: (number | 'dots')[] = [];
-                    const maxButtons = 7;
-                    if (totalPages <= maxButtons) {
-                      for (let p = 1; p <= totalPages; p++) pages.push(p);
-                    } else {
-                      const start = Math.max(2, currentPage - 2);
-                      const end = Math.min(totalPages - 1, currentPage + 2);
-                      pages.push(1);
-                      if (start > 2) pages.push('dots');
-                      for (let p = start; p <= end; p++) pages.push(p);
-                      if (end < totalPages - 1) pages.push('dots');
-                      pages.push(totalPages);
-                    }
-
-                    return pages.map((p, idx) => {
-                      if (p === 'dots') {
-                        return (
-                          <span key={`dots-${idx}`} className="px-2 text-gray-400">
-                            …
-                          </span>
-                        );
-                      }
-                      const active = p === currentPage;
-                      return (
-                        <Button
-                          key={`page-${p}`}
-                          variant="outline"
-                          className={
-                            active
-                              ? 'border-purple-400 bg-purple-50 text-purple-900 hover:bg-purple-100'
-                              : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                          }
-                          disabled={loading}
-                          onClick={() => goToPage(p)}
-                        >
-                          {p}
-                        </Button>
-                      );
-                    });
-                  })()}
-
-                  <Button
-                    variant="outline"
-                    className="border-gray-300 text-gray-700 hover:bg-gray-50"
-                    disabled={currentPage >= totalPages || loading}
-                    onClick={() => goToPage(currentPage + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-          </CardContent>
-        </Card>
-
-        {/* Bulk Download Format Dialog */}
-        <Dialog
-          open={isDownloadDialogOpen}
-          onOpenChange={(open) => {
-            setIsDownloadDialogOpen(open);
-            if (!open) setBulkDownloadError(null);
-          }}
-        >
-          <DialogContent className="bg-white border border-gray-200">
-            <DialogHeader>
-              <DialogTitle className="text-gray-900">Select download format</DialogTitle>
-              <DialogDescription className="text-gray-600">
-                {selectedLogIds.length} log{selectedLogIds.length === 1 ? '' : 's'} selected
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-3">
-              <Label className="text-gray-700">Format</Label>
-              <Select
-                value={downloadFormat}
-                onValueChange={(val) => setDownloadFormat(val as 'mcap' | 'csv_omni' | 'csv_tvn' | 'ld')}
-              >
-                <SelectTrigger className="w-full bg-white border-gray-300">
-                  <SelectValue placeholder="Select format" />
-                </SelectTrigger>
-                <SelectContent className="bg-white border border-gray-200">
-                  <SelectItem value="mcap">MCAP (original)</SelectItem>
-                  <SelectItem value="csv_omni">CSV (omni)</SelectItem>
-                  <SelectItem value="csv_tvn">CSV (tvn)</SelectItem>
-                  <SelectItem value="ld">LD (i2)</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {bulkDownloadError && (
-                <p className="text-sm text-red-600">{bulkDownloadError}</p>
-              )}
-
-              {bulkDownloading && (
-                <div className="flex items-center gap-3 rounded-md border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-900">
-                  <span
-                    className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-purple-400 border-t-transparent"
-                    aria-hidden
-                  />
-                  <span>
-                    {downloadFormat === 'mcap'
-                      ? 'Preparing ZIP…'
-                      : `Converting to ${downloadFormat.replace('csv_', '').toUpperCase()} and preparing ZIP…`}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <DialogFooter className="gap-2">
-              <Button 
-                variant="outline" 
-                onClick={() => setIsDownloadDialogOpen(false)}
-                className="border-gray-300 text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </Button>
-              <Button 
-                onClick={handleBulkDownload} 
-                disabled={bulkDownloading}
-                className="bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-50"
-              >
-                {bulkDownloading ? 'Preparing...' : 'Download'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* View Modal */}
-        <Dialog open={isViewModalOpen} onOpenChange={(open) => {
-          setIsViewModalOpen(open);
-          if (!open) setSelectedLog(null);
-        }}>
-          {selectedLog && (
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto bg-white border border-gray-200">
-              <DialogHeader>
-                <DialogTitle className="text-gray-900">Log Details - ID: {selectedLog.id}</DialogTitle>
-              </DialogHeader>
-                {loadingLog ? (
-                  <div className="text-center py-8">
-                    <p className="text-gray-600">Loading log details...</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Recovery Status</label>
-                        <p className="text-gray-900">{selectedLog.recovery_status || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Parse Status</label>
-                        <p className="text-gray-900">{selectedLog.parse_status || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Captured At</label>
-                        <p className="text-gray-900">
-                          {selectedLog.captured_at ? new Date(selectedLog.captured_at).toLocaleString() : 'N/A'}
-                        </p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Duration</label>
-                        <p className="text-gray-900">
-                          {selectedLog.duration_seconds ? `${selectedLog.duration_seconds.toFixed(1)}s` : 'N/A'}
-                        </p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Channel Count</label>
-                        <p className="text-gray-900">{selectedLog.channel_count ?? 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Rough Point</label>
-                        <p className="text-gray-900">{selectedLog.rough_point || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Car</label>
-                        <p className="text-gray-900">{getLogCars(selectedLog).join(', ') || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Driver</label>
-                        <p className="text-gray-900">{getLogDrivers(selectedLog).join(', ') || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Event Type</label>
-                        <p className="text-gray-900">{getLogEventTypes(selectedLog).join(', ') || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Location</label>
-                        <p className="text-gray-900">{getLogLocations(selectedLog).join(', ') || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Created At</label>
-                        <p className="text-gray-900">
-                          {selectedLog.created_at ? new Date(selectedLog.created_at).toLocaleString() : 'N/A'}
-                        </p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Updated At</label>
-                        <p className="text-gray-900">
-                          {selectedLog.updated_at ? new Date(selectedLog.updated_at).toLocaleString() : 'N/A'}
-                        </p>
-                      </div>
-                    </div>
-                    {selectedLog.channels && selectedLog.channels.length > 0 && (
-                      <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                        <div className="flex justify-between items-center mb-3">
-                          <label className="text-base font-semibold text-gray-900">
-                            Channels
-                          </label>
-                          <span className="text-sm text-gray-600">
-                            Count: {selectedLog.channel_count ?? selectedLog.channels.length}
-                          </span>
-                        </div>
-                        <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg bg-white">
-                          <table className="w-full border-collapse">
-                            <thead className="sticky top-0 bg-gray-100">
-                              <tr>
-                                <th className="text-left py-2 px-4 text-sm font-semibold text-gray-700 border-b border-gray-200">
-                                  #
-                                </th>
-                                <th className="text-left py-2 px-4 text-sm font-semibold text-gray-700 border-b border-gray-200">
-                                  Channel Name
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {selectedLog.channels.map((channel, idx) => (
-                                <tr
-                              key={idx}
-                                  className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
-                            >
-                                  <td className="py-2 px-4 text-sm text-gray-600">
-                                    {idx + 1}
-                                  </td>
-                                  <td className="py-2 px-4 text-sm text-gray-900 font-mono">
-                              {channel}
-                                  </td>
-                                </tr>
-                          ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-                    {selectedLog.notes && (
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Notes</label>
-                        <p className="text-gray-900 mt-1">{selectedLog.notes}</p>
-                      </div>
-                    )}
-                    <div className="pt-4">
-                      <Button
-                        onClick={() => fetchGeoJson(selectedLog.id)}
-                        disabled={loadingGeoJson}
-                        className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300"
-                      >
-                        {loadingGeoJson ? 'Loading Map...' : 'View on Map'}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-            </DialogContent>
-        )}
-        </Dialog>
-
-        {/* Map Modal */}
-        <Dialog open={isMapModalOpen} onOpenChange={(open) => {
-          setIsMapModalOpen(open);
-          if (!open) setGeoJsonData(null);
-        }}>
-          {geoJsonData && (
-            <DialogContent className="max-w-6xl w-full h-[90vh] flex flex-col p-0 bg-white border border-gray-200">
-              <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-                <DialogTitle>Map View - Log ID: {selectedLog?.id}</DialogTitle>
-              </div>
-              <div className="flex-1 relative">
-                <MapComponent geoJsonData={geoJsonData} />
-              </div>
-            </DialogContent>
-        )}
-        </Dialog>
-
-        {/* Edit Modal */}
-        <Dialog open={isEditModalOpen} onOpenChange={(open) => {
-          setIsEditModalOpen(open);
-          if (!open) setSelectedLog(null);
-        }}>
-          {selectedLog && (
-            <DialogContent className="max-w-2xl bg-white border border-gray-200">
-              <DialogHeader>
-                <DialogTitle className="text-gray-900">Edit Log - ID: {selectedLog.id}</DialogTitle>
-              </DialogHeader>
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-gray-700">Cars</Label>
-                    <p className="text-xs text-gray-500 mb-1">Add one or more car labels.</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {(editForm.cars || []).map((name) => (
-                        <span
-                          key={name}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
-                        >
-                          {name}
-                          <button
-                            type="button"
-                            aria-label={`Remove car ${name}`}
-                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
-                            onClick={() => setEditForm({ ...editForm, cars: editForm.cars.filter((v) => v !== name) })}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        placeholder="Add car"
-                        value={editCarInput}
-                        onChange={(e) => setEditCarInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const v = editCarInput.trim();
-                            if (v && !editForm.cars.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                              setEditForm({ ...editForm, cars: [...editForm.cars, v] });
-                              setEditCarInput('');
-                            }
-                          }
-                        }}
-                        className="flex-1 bg-white border-gray-300"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="border-gray-300"
-                        onClick={() => {
-                          const v = editCarInput.trim();
-                          if (v && !editForm.cars.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                            setEditForm({ ...editForm, cars: [...editForm.cars, v] });
-                            setEditCarInput('');
-                          }
-                        }}
-                      >
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-gray-700">Drivers</Label>
-                    <p className="text-xs text-gray-500 mb-1">Add one or more driver labels.</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {(editForm.drivers || []).map((name) => (
-                        <span
-                          key={name}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
-                        >
-                          {name}
-                          <button
-                            type="button"
-                            aria-label={`Remove driver ${name}`}
-                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
-                            onClick={() => setEditForm({ ...editForm, drivers: editForm.drivers.filter((v) => v !== name) })}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        placeholder="Add driver"
-                        value={editDriverInput}
-                        onChange={(e) => setEditDriverInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const v = editDriverInput.trim();
-                            if (v && !editForm.drivers.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                              setEditForm({ ...editForm, drivers: [...editForm.drivers, v] });
-                              setEditDriverInput('');
-                            }
-                          }
-                        }}
-                        className="flex-1 bg-white border-gray-300"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="border-gray-300"
-                        onClick={() => {
-                          const v = editDriverInput.trim();
-                          if (v && !editForm.drivers.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                            setEditForm({ ...editForm, drivers: [...editForm.drivers, v] });
-                            setEditDriverInput('');
-                          }
-                        }}
-                      >
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-gray-700">Event Types</Label>
-                    <p className="text-xs text-gray-500 mb-1">Add one or more event type labels.</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {(editForm.event_types || []).map((name) => (
-                        <span
-                          key={name}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
-                        >
-                          {name}
-                          <button
-                            type="button"
-                            aria-label={`Remove event type ${name}`}
-                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
-                            onClick={() => setEditForm({ ...editForm, event_types: editForm.event_types.filter((v) => v !== name) })}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        placeholder="Add event type"
-                        value={editEventTypeInput}
-                        onChange={(e) => setEditEventTypeInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const v = editEventTypeInput.trim();
-                            if (v && !editForm.event_types.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                              setEditForm({ ...editForm, event_types: [...editForm.event_types, v] });
-                              setEditEventTypeInput('');
-                            }
-                          }
-                        }}
-                        className="flex-1 bg-white border-gray-300"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="border-gray-300"
-                        onClick={() => {
-                          const v = editEventTypeInput.trim();
-                          if (v && !editForm.event_types.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                            setEditForm({ ...editForm, event_types: [...editForm.event_types, v] });
-                            setEditEventTypeInput('');
-                          }
-                        }}
-                      >
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-gray-700">Locations</Label>
-                    <p className="text-xs text-gray-500 mb-1">Add one or more location labels.</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {(editForm.locations || []).map((name) => (
-                        <span
-                          key={name}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
-                        >
-                          {name}
-                          <button
-                            type="button"
-                            aria-label={`Remove location ${name}`}
-                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
-                            onClick={() => setEditForm({ ...editForm, locations: editForm.locations.filter((v) => v !== name) })}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        placeholder="Add location"
-                        value={editLocationInput}
-                        onChange={(e) => setEditLocationInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const v = editLocationInput.trim();
-                            if (v && !editForm.locations.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                              setEditForm({ ...editForm, locations: [...editForm.locations, v] });
-                              setEditLocationInput('');
-                            }
-                          }
-                        }}
-                        className="flex-1 bg-white border-gray-300"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="border-gray-300"
-                        onClick={() => {
-                          const v = editLocationInput.trim();
-                          if (v && !editForm.locations.some((x) => x.toLowerCase() === v.toLowerCase())) {
-                            setEditForm({ ...editForm, locations: [...editForm.locations, v] });
-                            setEditLocationInput('');
-                          }
-                        }}
-                      >
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-gray-700">Tags</Label>
-                    <p className="text-xs text-gray-500 mb-1">Add custom tags for filtering (e.g. bell crank testing)</p>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {(editForm.tags || []).map((tag) => (
-                        <span
-                          key={tag}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
-                        >
-                          {tag}
-                          <button
-                            type="button"
-                            aria-label={`Remove tag ${tag}`}
-                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
-                            onClick={() => setEditForm({ ...editForm, tags: (editForm.tags || []).filter((t) => t !== tag) })}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        placeholder="New tag"
-                        value={editTagInput}
-                        onChange={(e) => setEditTagInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const v = editTagInput.trim();
-                            if (v && !(editForm.tags || []).includes(v)) {
-                              setEditForm({ ...editForm, tags: [...(editForm.tags || []), v] });
-                              setEditTagInput('');
-                            }
-                          }
-                        }}
-                        className="flex-1 bg-white border-gray-300"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="border-gray-300"
-                        onClick={() => {
-                          const v = editTagInput.trim();
-                          if (v && !(editForm.tags || []).includes(v)) {
-                            setEditForm({ ...editForm, tags: [...(editForm.tags || []), v] });
-                            setEditTagInput('');
-                          }
-                        }}
-                      >
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                  <div>
-                  <Label htmlFor="notes" className="text-gray-700">Notes</Label>
-                  <Textarea
-                    id="notes"
-                      value={editForm.notes}
-                      onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
-                      rows={4}
-                      className="bg-white border-gray-300"
-                    />
-                  </div>
-                <DialogFooter>
-                  <Button
-                    onClick={() => handleUpdateLog(selectedLog.id, false)}
-                    disabled={saving}
-                    className="bg-purple-600 hover:bg-purple-700 text-white"
-                  >
-                    {saving ? 'Saving...' : 'Save'}
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      setIsEditModalOpen(false);
-                      setSelectedLog(null);
-                    }}
-                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300"
-                  >
-                    Cancel
-                  </Button>
-                </DialogFooter>
-                  </div>
-            </DialogContent>
-        )}
-        </Dialog>
-
-        {/* Delete Confirmation Modal */}
-        <Dialog open={isDeleteModalOpen} onOpenChange={(open) => {
-          setIsDeleteModalOpen(open);
-          if (!open) setLogToDelete(null);
-        }}>
-          {logToDelete !== null && (
-            <DialogContent className="max-w-md bg-white border border-gray-200">
-              <DialogHeader>
-                <DialogTitle className="text-gray-900">Confirm Delete</DialogTitle>
-                <DialogDescription className="text-gray-600">
-                  Are you sure you want to delete log ID {logToDelete}? This action cannot be undone.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button
-                    onClick={() => handleDeleteLog(logToDelete)}
-                    disabled={deleting}
-                    className="bg-red-600 hover:bg-red-700 text-white"
-                  >
-                    {deleting ? 'Deleting...' : 'Delete'}
-                </Button>
-                <Button
-                    onClick={() => {
-                      setIsDeleteModalOpen(false);
-                      setLogToDelete(null);
-                    }}
-                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300"
-                  >
-                    Cancel
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          )}
-        </Dialog>
+        {/* Header */}
+        <div className="mb-7">
+          <h1 className="font-serif text-4xl" style={{ color: 'var(--charcoal)', fontWeight: 900, letterSpacing: '-0.03em' }}>
+            MCAP{' '}
+            <span style={{ color: 'var(--ochre)' }}>Log Manager</span>
+          </h1>
+          <p className="text-sm mt-1" style={{ color: 'var(--sienna)' }}>
+            Upload, browse, and annotate MCAP telemetry logs.
+          </p>
         </div>
+
+        {/* Error banner */}
+        {error && (
+          <div
+            className="mb-5 rounded-lg px-4 py-3 text-sm flex items-start gap-2"
+            style={{ background: 'rgba(179,58,46,0.08)', color: 'var(--danger)', border: '1px solid rgba(179,58,46,0.24)' }}
+          >
+            <span className="mr-1 mt-0.5 shrink-0">⚠</span>
+            <span>{error}</span>
+            <button className="ml-auto text-xs opacity-60 hover:opacity-100" onClick={() => setError(null)}>✕</button>
+          </div>
+        )}
+
+        {/* Upload */}
+        <UploadCard
+          onUploaded={(ids) => {
+            setProcessingIds((p) => [...new Set([...p, ...ids])]);
+            loadLogs();
+          }}
+        />
+
+        {/* Logs card */}
+        <div className="skeuo-card">
+          <div className="skeuo-card-header">
+            <LogsToolbar
+              selectedCount={selectedIds.length}
+              totalCount={totalCount}
+              loading={loading}
+              onDownload={openDownload}
+              onDelete={openDelete}
+              onRefresh={loadLogs}
+            />
+            <LogsFilters lookups={lookups} />
+          </div>
+
+          <div className="skeuo-card-content">
+            <LogsTable
+              logs={logs}
+              selectedIds={selectedIds}
+              processingIds={processingIds}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalCount={totalCount}
+              pageSize={PAGE_SIZE}
+              loading={loading}
+              onToggleAll={toggleAll}
+              onToggle={toggleSelect}
+              onView={openView}
+              onEdit={openEdit}
+              onPageChange={goToPage}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Modals */}
+      <ViewModal
+        log={viewLog}
+        open={viewOpen}
+        loading={viewLoading}
+        onClose={() => { setViewOpen(false); setViewLog(null); }}
+        onViewMap={(id) => { setViewOpen(false); openMap(id); }}
+      />
+      <EditModal
+        log={editLog}
+        open={editOpen}
+        saving={saving}
+        onClose={() => { setEditOpen(false); setEditLog(null); }}
+        onSave={handleSave}
+      />
+      <DeleteConfirmModal
+        ids={deleteIds}
+        open={deleteOpen}
+        deleting={deleting}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={handleDelete}
+      />
+      <DownloadModal
+        open={downloadOpen}
+        selectedCount={selectedIds.length}
+        format={downloadFormat}
+        downloading={downloading}
+        error={downloadError}
+        onFormatChange={setDownloadFormat}
+        onClose={() => setDownloadOpen(false)}
+        onDownload={handleDownload}
+      />
+      <MapModal
+        open={mapOpen}
+        logId={mapLogId}
+        geoJsonData={geoJsonData}
+        onClose={() => { setMapOpen(false); setGeoJsonData(null); }}
+      />
     </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
+// Default export wraps in Suspense (required for useSearchParams)
+// ──────────────────────────────────────────────────────────────
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-sm" style={{ color: 'var(--sienna)' }}>Loading…</p>
+      </div>
+    }>
+      <McapDashboard />
+    </Suspense>
   );
 }
