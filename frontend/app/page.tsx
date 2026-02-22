@@ -60,6 +60,8 @@ function McapDashboard() {
 
   // ── DB indicator ──
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   // ── Selection ──
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -296,27 +298,29 @@ function McapDashboard() {
   // ══════════════════════════════
   return (
     <div className="min-h-screen py-8 px-4 sm:px-8">
-      {/* DB status indicator */}
-      <div
-        className="fixed top-4 right-4 z-50 flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
-        style={{
-          background: 'rgba(232,224,212,0.92)',
-          border: '1px solid rgba(42,38,34,0.2)',
-          color: 'var(--sienna)',
-          backdropFilter: 'blur(4px)',
-        }}
-        title={`Database: ${dbStatus}`}
-      >
-        <span
-          className={`block h-2 w-2 rounded-full ${dbStatus === 'connected' ? 'bg-green-500' :
-            dbStatus === 'disconnected' ? 'bg-red-500' : 'bg-amber-400'
-            }`}
-        />
-        {dbStatus}
-      </div>
+      {/* DB status indicator — only render after mount to avoid hydration mismatch */}
+      {mounted && (
+        <div
+          className="fixed top-4 right-4 z-50 flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
+          style={{
+            background: 'rgba(232,224,212,0.92)',
+            border: '1px solid rgba(42,38,34,0.2)',
+            color: 'var(--sienna)',
+            backdropFilter: 'blur(4px)',
+          }}
+          title={`Database: ${dbStatus}`}
+        >
+          <span
+            className={`block h-2 w-2 rounded-full ${dbStatus === 'connected' ? 'bg-green-500' :
+              dbStatus === 'disconnected' ? 'bg-red-500' : 'bg-amber-400'
+              }`}
+          />
+          {dbStatus}
+        </div>
+      )}
 
       {/* Toast */}
-      {toastMsg && (
+      {mounted && toastMsg && (
         <div
           className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium shadow-lg"
           role="status"
@@ -392,6 +396,7 @@ function McapDashboard() {
               onToggle={toggleSelect}
               onView={openView}
               onEdit={openEdit}
+              onViewMap={openMap}
               onPageChange={goToPage}
             />
           </div>
@@ -410,6 +415,7 @@ function McapDashboard() {
         log={editLog}
         open={editOpen}
         saving={saving}
+        lookups={lookups}
         onClose={() => { setEditOpen(false); setEditLog(null); }}
         onSave={handleSave}
       />

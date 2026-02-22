@@ -32,6 +32,7 @@ class McapLogSerializer(serializers.ModelSerializer):
     event_types = serializers.ListField(child=serializers.CharField(), required=False)
     locations = serializers.ListField(child=serializers.CharField(), required=False)
     tags = serializers.ListField(child=serializers.CharField(), required=False)
+    map_data_available = serializers.SerializerMethodField()
 
     class Meta:
         model = McapLog
@@ -58,8 +59,13 @@ class McapLogSerializer(serializers.ModelSerializer):
             "drivers",
             "event_types",
             "locations",
+            "map_preview_uri",
+            "map_data_available",
             "file",
         ]
+
+    def get_map_data_available(self, obj):
+        return bool(obj.lap_path)
 
     def validate_tags(self, value):
         return _normalize_string_array(value)

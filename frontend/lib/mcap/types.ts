@@ -12,6 +12,8 @@ export interface McapLog {
     drivers?: string[];
     event_types?: string[];
     locations?: string[];
+    map_preview_uri?: string;
+    map_data_available?: boolean;
     notes?: string;
     tags?: string[];
     created_at?: string;

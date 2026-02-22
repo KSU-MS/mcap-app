@@ -11,6 +11,8 @@ POSTGRES_PORT="${POSTGRES_PORT:-5433}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-mcap_query_db}"
+RECONCILE_MAP_PREVIEWS="${RECONCILE_MAP_PREVIEWS:-1}"
+RECONCILE_MAP_PREVIEWS_LIMIT="${RECONCILE_MAP_PREVIEWS_LIMIT:-0}"
 
 command -v pg_ctl >/dev/null 2>&1 || { echo "pg_ctl not on PATH. Run this script inside 'nix develop'."; exit 1; }
 command -v redis-server >/dev/null 2>&1 || { echo "redis-server not on PATH. Run this script inside 'nix develop'."; exit 1; }
@@ -42,6 +44,31 @@ case "${1:-start}" in
     fi
 
     echo "Services ready. Postgres: localhost:$POSTGRES_PORT ($POSTGRES_DB) | Redis: localhost:$REDIS_PORT"
+
+    if [[ "$RECONCILE_MAP_PREVIEWS" == "1" ]]; then
+      if [[ -f "$ROOT/backend/manage.py" ]]; then
+        echo "Reconciling map previews (sync, idempotent) ..."
+        set +e
+        if command -v nix >/dev/null 2>&1; then
+          reconcile_cmd=(nix develop -c python "$ROOT/backend/manage.py" generate_map_previews --sync)
+        else
+          reconcile_cmd=(python "$ROOT/backend/manage.py" generate_map_previews --sync)
+        fi
+        if [[ "$RECONCILE_MAP_PREVIEWS_LIMIT" =~ ^[0-9]+$ ]] && [[ "$RECONCILE_MAP_PREVIEWS_LIMIT" -gt 0 ]]; then
+          reconcile_cmd+=(--limit "$RECONCILE_MAP_PREVIEWS_LIMIT")
+        fi
+        "${reconcile_cmd[@]}"
+        rc=$?
+        set -e
+        if [[ $rc -ne 0 ]]; then
+          echo "Map preview reconciliation failed (exit $rc)."
+          echo "You can retry manually: nix develop -c python backend/manage.py generate_map_previews --sync"
+          echo "Or disable auto-reconcile with: RECONCILE_MAP_PREVIEWS=0 ./scripts/start-nix-services.sh start"
+        fi
+      else
+        echo "Skipping map preview reconciliation: backend/manage.py not found."
+      fi
+    fi
     ;;
   stop)
     echo "Stopping Postgres and Redis ..."

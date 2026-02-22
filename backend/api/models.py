@@ -52,3 +52,9 @@ class McapLog(models.Model):
     locations = models.JSONField(
         default=list, blank=True, help_text="User-defined location labels for filtering"
     )
+    map_preview_uri = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text="Immutable SVG map preview URI",
+    )

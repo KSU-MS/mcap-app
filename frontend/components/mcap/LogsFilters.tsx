@@ -2,9 +2,9 @@
 
 import { useCallback, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search } from 'lucide-react';
+import { DatePickerInput } from './DatePickerInput';
 
 interface Lookups {
     cars: string[];
@@ -53,7 +53,7 @@ export function LogsFilters({ lookups }: Props) {
 
     return (
         <div>
-            {/* Search */}
+            {/* Search — full width */}
             <div className="relative mb-3">
                 <Search
                     className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none"
@@ -63,98 +63,101 @@ export function LogsFilters({ lookups }: Props) {
                     type="text"
                     placeholder="Search by ID, car, driver, event type, notes…"
                     defaultValue={params.get('search') ?? ''}
-                    className="skeuo-input pl-9"
+                    className="skeuo-input w-full"
+                    style={{ paddingLeft: '2.25rem' }}
                     onChange={(e) => {
                         const v = e.target.value;
-                        // Debounce via a simple timeout stored on element
                         clearTimeout((e.target as any)._t);
                         (e.target as any)._t = setTimeout(() => update('search', v), 300);
                     }}
                 />
             </div>
 
-            {/* Filter row */}
-            <div className="flex flex-wrap items-end gap-2">
-                {/* Date range */}
-                <FilterGroup label="From">
-                    <input
-                        type="date"
-                        className="skeuo-input w-[130px]"
-                        defaultValue={params.get('start_date') ?? ''}
-                        onChange={(e) => update('start_date', e.target.value)}
-                    />
-                </FilterGroup>
-                <FilterGroup label="To">
-                    <input
-                        type="date"
-                        className="skeuo-input w-[130px]"
-                        defaultValue={params.get('end_date') ?? ''}
-                        onChange={(e) => update('end_date', e.target.value)}
-                    />
-                </FilterGroup>
+            {/* Filter rows */}
+            <div className="flex flex-col gap-2">
+                {/* Row 1: dates + main dropdowns */}
+                <div className="flex flex-wrap items-end gap-2">
+                    <FilterGroup label="From">
+                        <DatePickerInput
+                            value={params.get('start_date') ?? ''}
+                            onChange={(v) => update('start_date', v)}
+                            placeholder="Start date"
+                            width="w-[140px]"
+                        />
+                    </FilterGroup>
 
-                <FilterGroup label="Car">
-                    <DropdownFilter
-                        value={params.get('car') ?? ''}
-                        options={lookups.cars}
-                        onChange={(v) => update('car', v)}
-                        width="w-[140px]"
-                    />
-                </FilterGroup>
+                    <FilterGroup label="To">
+                        <DatePickerInput
+                            value={params.get('end_date') ?? ''}
+                            onChange={(v) => update('end_date', v)}
+                            placeholder="End date"
+                            width="w-[140px]"
+                        />
+                    </FilterGroup>
 
-                <FilterGroup label="Event type">
-                    <DropdownFilter
-                        value={params.get('event_type') ?? ''}
-                        options={lookups.eventTypes}
-                        onChange={(v) => update('event_type', v)}
-                        width="w-[150px]"
-                    />
-                </FilterGroup>
+                    <FilterGroup label="Car">
+                        <DropdownFilter
+                            value={params.get('car') ?? ''}
+                            options={lookups.cars}
+                            onChange={(v) => update('car', v)}
+                            width="w-[110px]"
+                        />
+                    </FilterGroup>
 
-                <FilterGroup label="Driver">
-                    <DropdownFilter
-                        value={params.get('driver') ?? ''}
-                        options={lookups.drivers}
-                        onChange={(v) => update('driver', v)}
-                        width="w-[140px]"
-                    />
-                </FilterGroup>
+                    <FilterGroup label="Event type">
+                        <DropdownFilter
+                            value={params.get('event_type') ?? ''}
+                            options={lookups.eventTypes}
+                            onChange={(v) => update('event_type', v)}
+                            width="w-[130px]"
+                        />
+                    </FilterGroup>
 
-                <FilterGroup label="Tag">
-                    <DropdownFilter
-                        value={params.get('tag') ?? ''}
-                        options={lookups.tags}
-                        onChange={(v) => update('tag', v)}
-                        width="w-[150px]"
-                    />
-                </FilterGroup>
+                    <FilterGroup label="Driver">
+                        <DropdownFilter
+                            value={params.get('driver') ?? ''}
+                            options={lookups.drivers}
+                            onChange={(v) => update('driver', v)}
+                            width="w-[110px]"
+                        />
+                    </FilterGroup>
 
-                <FilterGroup label="Channel">
-                    <DropdownFilter
-                        value={params.get('channel') ?? ''}
-                        options={lookups.channels}
-                        onChange={(v) => update('channel', v)}
-                        width="w-[170px]"
-                    />
-                </FilterGroup>
+                    <FilterGroup label="Tag">
+                        <DropdownFilter
+                            value={params.get('tag') ?? ''}
+                            options={lookups.tags}
+                            onChange={(v) => update('tag', v)}
+                            width="w-[110px]"
+                        />
+                    </FilterGroup>
 
-                <FilterGroup label="Location">
-                    <DropdownFilter
-                        value={params.get('location') ?? ''}
-                        options={lookups.locations}
-                        onChange={(v) => update('location', v)}
-                        width="w-[170px]"
-                    />
-                </FilterGroup>
+                    <FilterGroup label="Channel">
+                        <DropdownFilter
+                            value={params.get('channel') ?? ''}
+                            options={lookups.channels}
+                            onChange={(v) => update('channel', v)}
+                            width="w-[130px]"
+                        />
+                    </FilterGroup>
 
-                {hasFilters && (
-                    <button
-                        className="skeuo-btn-ghost text-xs h-[34px] self-end"
-                        onClick={clearAll}
-                    >
-                        Clear filters
-                    </button>
-                )}
+                    <FilterGroup label="Location">
+                        <DropdownFilter
+                            value={params.get('location') ?? ''}
+                            options={lookups.locations}
+                            onChange={(v) => update('location', v)}
+                            width="w-[130px]"
+                        />
+                    </FilterGroup>
+
+                    {hasFilters && (
+                        <button
+                            className="skeuo-btn-ghost text-xs h-[34px] self-end"
+                            onClick={clearAll}
+                        >
+                            Clear filters
+                        </button>
+                    )}
+                </div>
             </div>
 
             {isPending && (

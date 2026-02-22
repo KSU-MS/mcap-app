@@ -2,6 +2,20 @@ import type { McapLog, PaginatedResponse, LogFilters, DownloadFormat } from './t
 
 export const API_BASE_URL = 'http://127.0.0.1:8000';
 
+function withApiBase(path?: string): string | undefined {
+    if (!path) return undefined;
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    if (path.startsWith('/')) return `${API_BASE_URL}${path}`;
+    return `${API_BASE_URL}/${path}`;
+}
+
+function normalizeLog(log: McapLog): McapLog {
+    return {
+        ...log,
+        map_preview_uri: withApiBase(log.map_preview_uri),
+    };
+}
+
 /** Fetch a paginated + filtered list of logs */
 export async function fetchLogs(filters: LogFilters): Promise<{ logs: McapLog[]; total: number }> {
     const params = new URLSearchParams();
@@ -20,23 +34,23 @@ export async function fetchLogs(filters: LogFilters): Promise<{ logs: McapLog[];
     if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
     const data = await res.json();
 
-    if (Array.isArray(data)) return { logs: data, total: data.length };
+    if (Array.isArray(data)) return { logs: data.map(normalizeLog), total: data.length };
     const paginated = data as PaginatedResponse<McapLog>;
-    return { logs: paginated.results ?? [], total: paginated.count ?? 0 };
+    return { logs: (paginated.results ?? []).map(normalizeLog), total: paginated.count ?? 0 };
 }
 
 /** Fetch a single log by ID */
 export async function fetchLog(id: number): Promise<McapLog> {
     const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`);
     if (!res.ok) throw new Error(`Failed to fetch log ${id}: ${res.statusText}`);
-    return res.json();
+    return normalizeLog(await res.json());
 }
 
 /** Fetch GeoJSON for a log */
 export async function fetchGeoJson(id: number): Promise<any> {
     const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/geojson`);
     if (!res.ok) throw new Error(`Failed to fetch GeoJSON: ${res.statusText}`);
-    return res.json();
+    return normalizeLog(await res.json());
 }
 
 /** PATCH or PUT a log */

@@ -1,8 +1,9 @@
 'use client';
 
-import { memo, useCallback } from 'react';
+import { memo } from 'react';
 import { Eye, Pencil } from 'lucide-react';
 import type { McapLog } from '@/lib/mcap/types';
+import { MapCell } from '@/components/mcap/MapCell';
 
 interface Props {
     logs: McapLog[];
@@ -17,6 +18,7 @@ interface Props {
     onToggle: (id: number) => void;
     onView: (id: number) => void;
     onEdit: (id: number) => void;
+    onViewMap: (id: number) => void;
     onPageChange: (page: number) => void;
 }
 
@@ -25,21 +27,49 @@ function normalizeList(v: unknown): string[] {
     return v.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
 }
 
-function statusBadgeClass(status: string) {
-    const s = status.toLowerCase();
-    if (s === 'completed' || s === 'success') return 'badge-success';
-    if (s === 'pending') return 'badge-pending';
-    if (s.startsWith('error')) return 'badge-error';
-    return 'badge-info';
+function isDone(s?: string) {
+    const v = s?.toLowerCase();
+    return v === 'completed' || v === 'success';
+}
+
+function statusDot(log: McapLog, processing: boolean): { color: string; title: string } {
+    if (processing) return { color: 'amber', title: 'Processing…' };
+    const recDone = isDone(log.recovery_status);
+    const parseDone = isDone(log.parse_status);
+    const recLabel = log.recovery_status ?? 'unknown';
+    const parseLabel = log.parse_status ?? 'unknown';
+    const title = `Rec: ${recLabel} · Parse: ${parseLabel}`;
+    if (recDone && parseDone) return { color: 'green', title };
+    if (recDone || parseDone) return { color: 'yellow', title };
+    return { color: 'red', title };
+}
+
+const DOT_CLASSES: Record<string, string> = {
+    green: 'bg-green-500',
+    yellow: 'bg-yellow-400',
+    red: 'bg-red-500',
+    amber: 'bg-amber-400 animate-pulse',
+};
+
+function StatusDot({ log, processing }: { log: McapLog; processing: boolean }) {
+    const { color, title } = statusDot(log, processing);
+    return (
+        <span
+            className={`inline-block h-2.5 w-2.5 rounded-full ${DOT_CLASSES[color]}`}
+            title={title}
+        />
+    );
 }
 
 const LogRow = memo(function LogRow({
+
     log,
     selected,
     processing,
     onToggle,
     onView,
     onEdit,
+    onViewMap,
 }: {
     log: McapLog;
     selected: boolean;
@@ -47,6 +77,7 @@ const LogRow = memo(function LogRow({
     onToggle: () => void;
     onView: () => void;
     onEdit: () => void;
+    onViewMap: (id: number) => void;
 }) {
     return (
         <tr className={selected ? 'selected-row' : ''}>
@@ -58,6 +89,16 @@ const LogRow = memo(function LogRow({
                     checked={selected}
                     onChange={onToggle}
                     aria-label={`Select log ${log.id}`}
+                />
+            </td>
+
+            {/* Map thumbnail */}
+            <td className="py-2 px-2">
+                <MapCell
+                    logId={log.id}
+                    mapPreviewUri={log.map_preview_uri}
+                    mapDataAvailable={log.map_data_available}
+                    onViewMap={onViewMap}
                 />
             </td>
 
@@ -84,26 +125,9 @@ const LogRow = memo(function LogRow({
                 {log.channel_count ?? '—'}
             </td>
 
-            {/* Status */}
+            {/* Status dot */}
             <td>
-                <div className="flex flex-col gap-1">
-                    {log.recovery_status && (
-                        <span className={statusBadgeClass(log.recovery_status)}>
-                            Rec: {log.recovery_status}
-                        </span>
-                    )}
-                    {log.parse_status && (
-                        <span className={statusBadgeClass(log.parse_status)}>
-                            Parse: {log.parse_status}
-                        </span>
-                    )}
-                    {processing && (
-                        <span className="badge-pending flex items-center gap-1">
-                            <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                            Processing
-                        </span>
-                    )}
-                </div>
+                <StatusDot log={log} processing={processing} />
             </td>
 
             {/* Car */}
@@ -168,6 +192,7 @@ export function LogsTable({
     onToggle,
     onView,
     onEdit,
+    onViewMap,
     onPageChange,
 }: Props) {
     const allSelected = logs.length > 0 && logs.every((l) => selectedIds.includes(l.id));
@@ -203,6 +228,7 @@ export function LogsTable({
                                     aria-label="Select all"
                                 />
                             </th>
+                            <th className="py-2 px-2 w-24">Map</th>
                             <th>ID</th>
                             <th>Date</th>
                             <th>Time</th>
@@ -226,6 +252,7 @@ export function LogsTable({
                                 onToggle={() => onToggle(log.id)}
                                 onView={() => onView(log.id)}
                                 onEdit={() => onEdit(log.id)}
+                                onViewMap={onViewMap}
                             />
                         ))}
                     </tbody>
