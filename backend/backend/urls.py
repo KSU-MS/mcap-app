@@ -3,11 +3,8 @@ from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
 from api.views import (
-    McapLogViewSet, 
+    McapLogViewSet,
     ParseSummaryView,
-    CarViewSet,
-    DriverViewSet,
-    EventTypeViewSet
 )
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
@@ -26,29 +23,14 @@ router = DefaultRouter()
 # - POST /api/mcap-logs/download/ (custom action)
 # - POST /api/mcap-logs/batch-upload/ (custom action)
 # - GET /api/mcap-logs/job-statuses/ (custom action)
-router.register(r'mcap-logs', McapLogViewSet)
-
-# CarViewSet endpoints (read-only):
-# - GET /api/cars/ (list)
-# - GET /api/cars/{id}/ (retrieve)
-router.register(r'cars', CarViewSet, basename='car')
-
-# DriverViewSet endpoints (read-only):
-# - GET /api/drivers/ (list)
-# - GET /api/drivers/{id}/ (retrieve)
-router.register(r'drivers', DriverViewSet, basename='driver')
-
-# EventTypeViewSet endpoints (read-only):
-# - GET /api/event-types/ (list)
-# - GET /api/event-types/{id}/ (retrieve)
-router.register(r'event-types', EventTypeViewSet, basename='event-type')
+router.register(r"mcap-logs", McapLogViewSet)
 
 # ===== API DOCUMENTATION =====
 # Swagger/OpenAPI schema view
 schema_view = get_schema_view(
     openapi.Info(
         title="MCAP Query Backend API",
-        default_version='v1',
+        default_version="v1",
         description="API for querying and managing MCAP log files with GPS tracking",
         terms_of_service="https://www.google.com/policies/terms/",
         contact=openapi.Contact(email="contact@example.com"),
@@ -60,16 +42,24 @@ schema_view = get_schema_view(
 # ===== URL PATTERNS =====
 urlpatterns = [
     # API documentation endpoints
-    re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
-    re_path(r'^swagger/$', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-    re_path(r'^redoc/$', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
-    
+    re_path(
+        r"^swagger(?P<format>\.json|\.yaml)$",
+        schema_view.without_ui(cache_timeout=0),
+        name="schema-json",
+    ),
+    re_path(
+        r"^swagger/$",
+        schema_view.with_ui("swagger", cache_timeout=0),
+        name="schema-swagger-ui",
+    ),
+    re_path(
+        r"^redoc/$", schema_view.with_ui("redoc", cache_timeout=0), name="schema-redoc"
+    ),
     # API routes with /api/ prefix (recommended)
-    path('api/', include(router.urls)),
+    path("api/", include(router.urls)),
     path("api/parse/summary/", ParseSummaryView.as_view(), name="parse-summary"),
-    
     # Root-level routes (for backward compatibility)
-    path('', include(router.urls)),
+    path("", include(router.urls)),
     path("parse/summary/", ParseSummaryView.as_view(), name="parse-summary-root"),
 ]
 

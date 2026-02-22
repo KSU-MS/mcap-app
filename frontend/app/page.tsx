@@ -328,9 +328,10 @@ interface McapLog {
   channels?: string[];
   channels_summary?: string[];
   rough_point?: string;
-  car?: string | { id: number; name: string };
-  driver?: string | { id: number; name: string };
-  event_type?: string | { id: number; name: string };
+  cars?: string[];
+  drivers?: string[];
+  event_types?: string[];
+  locations?: string[];
   notes?: string;
   tags?: string[];
   created_at?: string;
@@ -355,12 +356,17 @@ export default function Home() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [logToDelete, setLogToDelete] = useState<number | null>(null);
   const [editForm, setEditForm] = useState({
-    car: '',
-    driver: '',
-    event_type: '',
+    cars: [] as string[],
+    drivers: [] as string[],
+    event_types: [] as string[],
+    locations: [] as string[],
     notes: '',
     tags: [] as string[],
   });
+  const [editCarInput, setEditCarInput] = useState('');
+  const [editDriverInput, setEditDriverInput] = useState('');
+  const [editEventTypeInput, setEditEventTypeInput] = useState('');
+  const [editLocationInput, setEditLocationInput] = useState('');
   const [editTagInput, setEditTagInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -377,17 +383,17 @@ export default function Home() {
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [bulkDownloadError, setBulkDownloadError] = useState<string | null>(null);
   const [downloadCompleteMessage, setDownloadCompleteMessage] = useState<string | null>(null);
-  const [cars, setCars] = useState<{ id: number; name: string }[]>([]);
-  const [drivers, setDrivers] = useState<{ id: number; name: string }[]>([]);
-  const [eventTypes, setEventTypes] = useState<{ id: number; name: string }[]>([]);
-  const [loadingLookups, setLoadingLookups] = useState(false);
+  const [carNames, setCarNames] = useState<string[]>([]);
+  const [driverNames, setDriverNames] = useState<string[]>([]);
+  const [eventTypeNames, setEventTypeNames] = useState<string[]>([]);
+  const [locationNames, setLocationNames] = useState<string[]>([]);
   // Filter state for list
   const [filterStartDate, setFilterStartDate] = useState('');
   const [filterEndDate, setFilterEndDate] = useState('');
-  const [filterCarId, setFilterCarId] = useState('');
-  const [filterEventTypeId, setFilterEventTypeId] = useState('');
-  const [filterDriverId, setFilterDriverId] = useState('');
-  const [filterLocationBbox, setFilterLocationBbox] = useState('');
+  const [filterCar, setFilterCar] = useState('');
+  const [filterEventType, setFilterEventType] = useState('');
+  const [filterDriver, setFilterDriver] = useState('');
+  const [filterLocation, setFilterLocation] = useState('');
   const [filterChannel, setFilterChannel] = useState('');
   const [filterTag, setFilterTag] = useState('');
   const [tagNames, setTagNames] = useState<string[]>([]);
@@ -417,69 +423,64 @@ export default function Home() {
     }
   };
 
-  // Fetch cars, drivers, and event types for dropdowns
+  const normalizeStringList = (values: unknown): string[] => {
+    if (!Array.isArray(values)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const value of values) {
+      if (typeof value !== 'string') continue;
+      const item = value.trim();
+      if (!item) continue;
+      const key = item.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+    return out;
+  };
+
+  // Fetch distinct values for filter dropdowns
   const fetchLookups = async () => {
-    setLoadingLookups(true);
     try {
-      // Fetch cars
+      // Fetch distinct names for free-form fields and filter dropdowns
       try {
-        const carsResponse = await fetch(`${API_BASE_URL}/cars/`);
-        if (carsResponse.ok) {
-          const carsData = await carsResponse.json();
-          // Handle paginated response (DRF returns {results: [...]}) or direct array
-          const carsArray = Array.isArray(carsData) ? carsData : (carsData.results || []);
-          setCars(carsArray);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch cars:', err);
-      }
-
-      // Fetch drivers
-      try {
-        const driversResponse = await fetch(`${API_BASE_URL}/drivers/`);
-        if (driversResponse.ok) {
-          const driversData = await driversResponse.json();
-          // Handle paginated response (DRF returns {results: [...]}) or direct array
-          const driversArray = Array.isArray(driversData) ? driversData : (driversData.results || []);
-          setDrivers(driversArray);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch drivers:', err);
-      }
-
-      // Fetch event types
-      try {
-        const eventTypesResponse = await fetch(`${API_BASE_URL}/event-types/`);
-        if (eventTypesResponse.ok) {
-          const eventTypesData = await eventTypesResponse.json();
-          const eventTypesArray = Array.isArray(eventTypesData) ? eventTypesData : (eventTypesData.results || []);
-          setEventTypes(eventTypesArray);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch event types:', err);
-      }
-
-      // Fetch distinct tag names and channel names for filter dropdowns
-      try {
-        const [tagRes, channelRes] = await Promise.all([
+        const [carRes, driverRes, eventRes, locationRes, tagRes, channelRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/mcap-logs/car-names/`),
+          fetch(`${API_BASE_URL}/mcap-logs/driver-names/`),
+          fetch(`${API_BASE_URL}/mcap-logs/event-type-names/`),
+          fetch(`${API_BASE_URL}/mcap-logs/location-names/`),
           fetch(`${API_BASE_URL}/mcap-logs/tag-names/`),
           fetch(`${API_BASE_URL}/mcap-logs/channel-names/`),
         ]);
+        if (carRes.ok) {
+          const names = await carRes.json();
+          setCarNames(normalizeStringList(names));
+        }
+        if (driverRes.ok) {
+          const names = await driverRes.json();
+          setDriverNames(normalizeStringList(names));
+        }
+        if (eventRes.ok) {
+          const names = await eventRes.json();
+          setEventTypeNames(normalizeStringList(names));
+        }
+        if (locationRes.ok) {
+          const names = await locationRes.json();
+          setLocationNames(normalizeStringList(names));
+        }
         if (tagRes.ok) {
           const names = await tagRes.json();
-          setTagNames(Array.isArray(names) ? names : []);
+          setTagNames(normalizeStringList(names));
         }
         if (channelRes.ok) {
           const names = await channelRes.json();
-          setChannelNames(Array.isArray(names) ? names : []);
+          setChannelNames(normalizeStringList(names));
         }
       } catch (err) {
-        console.warn('Failed to fetch tag/channel names:', err);
+        console.warn('Failed to fetch lookup names:', err);
       }
     } catch (err) {
       console.error('Error fetching lookups:', err);
-    } finally {
-      setLoadingLookups(false);
     }
   };
 
@@ -506,10 +507,10 @@ export default function Home() {
       if (debouncedSearchQuery.trim()) params.set('search', debouncedSearchQuery.trim());
       if (filterStartDate.trim()) params.set('start_date', filterStartDate.trim());
       if (filterEndDate.trim()) params.set('end_date', filterEndDate.trim());
-      if (filterCarId.trim()) params.set('car_id', filterCarId.trim());
-      if (filterEventTypeId.trim()) params.set('event_type_id', filterEventTypeId.trim());
-      if (filterDriverId.trim()) params.set('driver_id', filterDriverId.trim());
-      if (filterLocationBbox.trim()) params.set('location', filterLocationBbox.trim());
+      if (filterCar.trim()) params.set('car', filterCar.trim());
+      if (filterEventType.trim()) params.set('event_type', filterEventType.trim());
+      if (filterDriver.trim()) params.set('driver', filterDriver.trim());
+      if (filterLocation.trim()) params.set('location', filterLocation.trim());
       if (filterChannel.trim()) params.set('channel', filterChannel.trim());
       if (filterTag.trim()) params.set('tag', filterTag.trim());
 
@@ -541,10 +542,10 @@ export default function Home() {
   const clearFilters = () => {
     setFilterStartDate('');
     setFilterEndDate('');
-    setFilterCarId('');
-    setFilterEventTypeId('');
-    setFilterDriverId('');
-    setFilterLocationBbox('');
+    setFilterCar('');
+    setFilterEventType('');
+    setFilterDriver('');
+    setFilterLocation('');
     setFilterChannel('');
     setFilterTag('');
     setCurrentPage(1);
@@ -656,57 +657,29 @@ export default function Home() {
     }
   };
 
-  // Helper to extract name from car/driver/event_type (handles both object and string)
-  const getName = (value: string | { id: number; name: string } | undefined): string => {
-    if (!value) return 'N/A';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'object' && 'name' in value) return value.name;
-    return 'N/A';
-  };
-
-  // Helper to extract ID from car/driver/event_type (handles both object and string)
-  const extractId = (value: any): string => {
-    if (!value) return '';
-    if (typeof value === 'object' && value.id) return value.id.toString();
-    if (typeof value === 'string') {
-      // If it's a string, try to find matching ID from lookups
-      const carMatch = cars.find(c => c.name === value);
-      if (carMatch) return carMatch.id.toString();
-      const driverMatch = drivers.find(d => d.name === value);
-      if (driverMatch) return driverMatch.id.toString();
-      const eventMatch = eventTypes.find(e => e.name === value);
-      if (eventMatch) return eventMatch.id.toString();
-    }
-    return '';
-  };
+  const getLogCars = (log: McapLog) => normalizeStringList(log.cars);
+  const getLogDrivers = (log: McapLog) => normalizeStringList(log.drivers);
+  const getLogEventTypes = (log: McapLog) => normalizeStringList(log.event_types);
+  const getLogLocations = (log: McapLog) => normalizeStringList(log.locations);
 
   // Open edit modal
   const handleEditLog = async (id: number) => {
     try {
       const log = await fetchLog(id);
       setSelectedLog(log);
-      
-      // Extract IDs - wait a bit if lookups aren't ready yet
-      let carId = extractId(log.car);
-      let driverId = extractId(log.driver);
-      let eventId = extractId(log.event_type);
-      
-      // If extraction failed and lookups aren't loaded, wait and try again
-      if ((!carId || !driverId || !eventId) && loadingLookups) {
-        // Wait for lookups to load
-        await new Promise(resolve => setTimeout(resolve, 500));
-        carId = extractId(log.car);
-        driverId = extractId(log.driver);
-        eventId = extractId(log.event_type);
-      }
-      
+
       setEditForm({
-        car: carId,
-        driver: driverId,
-        event_type: eventId,
+        cars: getLogCars(log),
+        drivers: getLogDrivers(log),
+        event_types: getLogEventTypes(log),
+        locations: getLogLocations(log),
         notes: log.notes || '',
-        tags: Array.isArray(log.tags) ? [...log.tags] : [],
+        tags: normalizeStringList(log.tags),
       });
+      setEditCarInput('');
+      setEditDriverInput('');
+      setEditEventTypeInput('');
+      setEditLocationInput('');
       setEditTagInput('');
       setIsEditModalOpen(true);
     } catch (err) {
@@ -722,49 +695,15 @@ export default function Home() {
     try {
       const method = usePut ? 'PUT' : 'PATCH';
       
-      // Build request body - convert IDs to numbers for car, driver, event_type; include tags
+      // Build request body with free-form JSON arrays
       const body: any = {
         notes: editForm.notes || '',
-        tags: editForm.tags && editForm.tags.length > 0 ? editForm.tags : [],
+        tags: normalizeStringList(editForm.tags),
+        cars: normalizeStringList(editForm.cars),
+        drivers: normalizeStringList(editForm.drivers),
+        event_types: normalizeStringList(editForm.event_types),
+        locations: normalizeStringList(editForm.locations),
       };
-
-      // Convert string IDs to numbers
-      // The API expects car_id, driver_id, event_type_id (with _id suffix) for updates
-      // For PATCH: only include fields that have values (don't send null)
-      // For PUT: include all fields, even if null
-      if (usePut) {
-        // PUT requires all fields - send null if empty
-        body.car_id = editForm.car && editForm.car.trim() !== '' ? Number(editForm.car) : null;
-        body.driver_id = editForm.driver && editForm.driver.trim() !== '' ? Number(editForm.driver) : null;
-        body.event_type_id = editForm.event_type && editForm.event_type.trim() !== '' ? Number(editForm.event_type) : null;
-      } else {
-        // PATCH: only include fields that have values
-        if (editForm.car && editForm.car.trim() !== '') {
-          const carId = Number(editForm.car);
-          if (!isNaN(carId) && carId > 0) {
-            body.car_id = carId;
-          }
-        }
-        if (editForm.driver && editForm.driver.trim() !== '') {
-          const driverId = Number(editForm.driver);
-          if (!isNaN(driverId) && driverId > 0) {
-            body.driver_id = driverId;
-          }
-        }
-        if (editForm.event_type && editForm.event_type.trim() !== '') {
-          const eventId = Number(editForm.event_type);
-          if (!isNaN(eventId) && eventId > 0) {
-            body.event_type_id = eventId;
-          }
-        }
-      }
-
-      console.log('=== UPDATE DEBUG ===');
-      console.log('Log ID:', id);
-      console.log('Method:', method);
-      console.log('Edit form state:', editForm);
-      console.log('Request body being sent:', body);
-      console.log('Body JSON:', JSON.stringify(body));
 
       const response = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`, {
         method,
@@ -778,7 +717,7 @@ export default function Home() {
         let errorMessage = `Update failed: ${response.statusText}`;
         try {
           const errorData = await response.json();
-          console.error('Update error response:', errorData); // Debug log
+          console.error('Update error response:', errorData);
           // Handle different error response formats
           if (errorData.detail) {
             errorMessage = errorData.detail;
@@ -802,22 +741,6 @@ export default function Home() {
 
       // Get the updated log data
       const updatedData = await response.json();
-      console.log('Update successful, response:', updatedData); // Debug log
-      console.log('Response car:', updatedData.car);
-      console.log('Response driver:', updatedData.driver);
-      console.log('Response event_type:', updatedData.event_type);
-      
-      // Check if the update actually worked
-      if (updatedData.car === null && body.car !== undefined) {
-        console.warn('⚠️ WARNING: Backend returned null for car despite sending:', body.car);
-        console.warn('This suggests the backend serializer may not be processing the car field in PATCH requests.');
-      }
-      if (updatedData.driver === null && body.driver !== undefined) {
-        console.warn('⚠️ WARNING: Backend returned null for driver despite sending:', body.driver);
-      }
-      if (updatedData.event_type === null && body.event_type !== undefined) {
-        console.warn('⚠️ WARNING: Backend returned null for event_type despite sending:', body.event_type);
-      }
 
       // Optimistically update the logs state with the response data
       setLogs((prevLogs) =>
@@ -825,26 +748,19 @@ export default function Home() {
           log.id === id
             ? {
                 ...log,
-                car: updatedData.car,
-                driver: updatedData.driver,
-                event_type: updatedData.event_type,
+                cars: normalizeStringList(updatedData.cars),
+                drivers: normalizeStringList(updatedData.drivers),
+                event_types: normalizeStringList(updatedData.event_types),
+                locations: normalizeStringList(updatedData.locations),
                 notes: updatedData.notes ?? log.notes,
-                tags: updatedData.tags ?? log.tags ?? [],
+                tags: normalizeStringList(updatedData.tags ?? log.tags),
               }
             : log
         )
       );
 
-      // Refresh tag names for filter dropdown in case a new tag was added
-      try {
-        const tagRes = await fetch(`${API_BASE_URL}/mcap-logs/tag-names/`);
-        if (tagRes.ok) {
-          const names = await tagRes.json();
-          setTagNames(Array.isArray(names) ? names : []);
-        }
-      } catch {
-        // ignore
-      }
+      // Refresh lookup names in case new values were added
+      await fetchLookups();
 
       setIsEditModalOpen(false);
       setSelectedLog(null);
@@ -960,7 +876,7 @@ export default function Home() {
     setCurrentPage(1);
     fetchLogs(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearchQuery, filterStartDate, filterEndDate, filterCarId, filterEventTypeId, filterDriverId, filterLocationBbox, filterChannel, filterTag]);
+  }, [debouncedSearchQuery, filterStartDate, filterEndDate, filterCar, filterEventType, filterDriver, filterLocation, filterChannel, filterTag]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
@@ -1311,42 +1227,42 @@ export default function Home() {
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs text-gray-500">Car</Label>
-                <Select value={filterCarId || 'all'} onValueChange={(v) => { setFilterCarId(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                <Select value={filterCar || 'all'} onValueChange={(v) => { setFilterCar(v === 'all' ? '' : v); setCurrentPage(1); }}>
                   <SelectTrigger className="w-[140px] bg-white border-gray-300">
                     <SelectValue placeholder="All" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                    {cars.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                    {carNames.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs text-gray-500">Event type</Label>
-                <Select value={filterEventTypeId || 'all'} onValueChange={(v) => { setFilterEventTypeId(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                <Select value={filterEventType || 'all'} onValueChange={(v) => { setFilterEventType(v === 'all' ? '' : v); setCurrentPage(1); }}>
                   <SelectTrigger className="w-[140px] bg-white border-gray-300">
                     <SelectValue placeholder="All" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                    {eventTypes.map((e) => (
-                      <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>
+                    {eventTypeNames.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs text-gray-500">Driver</Label>
-                <Select value={filterDriverId || 'all'} onValueChange={(v) => { setFilterDriverId(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                <Select value={filterDriver || 'all'} onValueChange={(v) => { setFilterDriver(v === 'all' ? '' : v); setCurrentPage(1); }}>
                   <SelectTrigger className="w-[140px] bg-white border-gray-300">
                     <SelectValue placeholder="All" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                    {drivers.map((d) => (
-                      <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+                    {driverNames.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1380,14 +1296,18 @@ export default function Home() {
                 </Select>
               </div>
               <div className="flex flex-col gap-1">
-                <Label className="text-xs text-gray-500">Location (bbox)</Label>
-                <Input
-                  type="text"
-                  placeholder="min_lon,min_lat,max_lon,max_lat"
-                  value={filterLocationBbox}
-                  onChange={(e) => { setFilterLocationBbox(e.target.value); setCurrentPage(1); }}
-                  className="w-[200px] bg-white border-gray-300 text-sm"
-                />
+                <Label className="text-xs text-gray-500">Location</Label>
+                <Select value={filterLocation || 'all'} onValueChange={(v) => { setFilterLocation(v === 'all' ? '' : v); setCurrentPage(1); }}>
+                  <SelectTrigger className="w-[200px] bg-white border-gray-300">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {locationNames.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <Button
                 type="button"
@@ -1516,13 +1436,13 @@ export default function Home() {
                         </div>
                       </td>
                       <td className="text-sm text-gray-700">
-                        {getName(log.car)}
+                        {getLogCars(log).join(', ') || 'N/A'}
                       </td>
                       <td className="text-sm text-gray-700">
-                        {getName(log.driver)}
+                        {getLogDrivers(log).join(', ') || 'N/A'}
                       </td>
                       <td className="text-sm text-gray-700">
-                        {getName(log.event_type)}
+                        {getLogEventTypes(log).join(', ') || 'N/A'}
                       </td>
                       <td className="text-sm text-gray-700 max-w-[180px]">
                         {log.tags && log.tags.length > 0 ? (
@@ -1777,15 +1697,19 @@ export default function Home() {
                       </div>
                       <div>
                         <label className="text-sm font-medium text-gray-600">Car</label>
-                        <p className="text-gray-900">{getName(selectedLog.car)}</p>
+                        <p className="text-gray-900">{getLogCars(selectedLog).join(', ') || 'N/A'}</p>
                       </div>
                       <div>
                         <label className="text-sm font-medium text-gray-600">Driver</label>
-                        <p className="text-gray-900">{getName(selectedLog.driver)}</p>
+                        <p className="text-gray-900">{getLogDrivers(selectedLog).join(', ') || 'N/A'}</p>
                       </div>
                       <div>
                         <label className="text-sm font-medium text-gray-600">Event Type</label>
-                        <p className="text-gray-900">{getName(selectedLog.event_type)}</p>
+                        <p className="text-gray-900">{getLogEventTypes(selectedLog).join(', ') || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium text-gray-600">Location</label>
+                        <p className="text-gray-900">{getLogLocations(selectedLog).join(', ') || 'N/A'}</p>
                       </div>
                       <div>
                         <label className="text-sm font-medium text-gray-600">Created At</label>
@@ -1891,148 +1815,228 @@ export default function Home() {
               </DialogHeader>
                 <div className="space-y-4">
                   <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <Label htmlFor="car" className="text-gray-700">Car</Label>
-                    {editForm.car && (
+                    <Label className="text-gray-700">Cars</Label>
+                    <p className="text-xs text-gray-500 mb-1">Add one or more car labels.</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {(editForm.cars || []).map((name) => (
+                        <span
+                          key={name}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
+                        >
+                          {name}
+                          <button
+                            type="button"
+                            aria-label={`Remove car ${name}`}
+                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
+                            onClick={() => setEditForm({ ...editForm, cars: editForm.cars.filter((v) => v !== name) })}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="Add car"
+                        value={editCarInput}
+                        onChange={(e) => setEditCarInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const v = editCarInput.trim();
+                            if (v && !editForm.cars.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                              setEditForm({ ...editForm, cars: [...editForm.cars, v] });
+                              setEditCarInput('');
+                            }
+                          }
+                        }}
+                        className="flex-1 bg-white border-gray-300"
+                      />
                       <Button
                         type="button"
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-6 px-2 text-xs text-gray-600 hover:text-gray-900"
-                        onClick={() => setEditForm({ ...editForm, car: '' })}
+                        className="border-gray-300"
+                        onClick={() => {
+                          const v = editCarInput.trim();
+                          if (v && !editForm.cars.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                            setEditForm({ ...editForm, cars: [...editForm.cars, v] });
+                            setEditCarInput('');
+                          }
+                        }}
                       >
-                        Clear
+                        Add
                       </Button>
-                    )}
-                  </div>
-                  {loadingLookups ? (
-                    <Input
-                      id="car"
-                      type="text"
-                      value="Loading..."
-                      disabled
-                      className="bg-gray-100 border-gray-300"
-                    />
-                  ) : (
-                    <Select
-                      value={editForm.car || undefined}
-                      onValueChange={(value) => {
-                        console.log('Car selected:', value);
-                        setEditForm({ ...editForm, car: value });
-                      }}
-                    >
-                      <SelectTrigger id="car" className="bg-white border-gray-300">
-                        <SelectValue placeholder="Select a car" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-white border border-gray-200 z-[100]">
-                        {cars.length === 0 ? (
-                          <div className="px-2 py-1.5 text-sm text-gray-500">No cars available</div>
-                        ) : (
-                          cars.map((car) => (
-                            <SelectItem key={car.id} value={car.id.toString()}>
-                              {car.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  )}
+                    </div>
                   </div>
                   <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <Label htmlFor="driver" className="text-gray-700">Driver</Label>
-                    {editForm.driver && (
+                    <Label className="text-gray-700">Drivers</Label>
+                    <p className="text-xs text-gray-500 mb-1">Add one or more driver labels.</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {(editForm.drivers || []).map((name) => (
+                        <span
+                          key={name}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
+                        >
+                          {name}
+                          <button
+                            type="button"
+                            aria-label={`Remove driver ${name}`}
+                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
+                            onClick={() => setEditForm({ ...editForm, drivers: editForm.drivers.filter((v) => v !== name) })}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="Add driver"
+                        value={editDriverInput}
+                        onChange={(e) => setEditDriverInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const v = editDriverInput.trim();
+                            if (v && !editForm.drivers.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                              setEditForm({ ...editForm, drivers: [...editForm.drivers, v] });
+                              setEditDriverInput('');
+                            }
+                          }
+                        }}
+                        className="flex-1 bg-white border-gray-300"
+                      />
                       <Button
                         type="button"
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-6 px-2 text-xs text-gray-600 hover:text-gray-900"
-                        onClick={() => setEditForm({ ...editForm, driver: '' })}
+                        className="border-gray-300"
+                        onClick={() => {
+                          const v = editDriverInput.trim();
+                          if (v && !editForm.drivers.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                            setEditForm({ ...editForm, drivers: [...editForm.drivers, v] });
+                            setEditDriverInput('');
+                          }
+                        }}
                       >
-                        Clear
+                        Add
                       </Button>
-                    )}
-                  </div>
-                  {loadingLookups ? (
-                    <Input
-                      id="driver"
-                      type="text"
-                      value="Loading..."
-                      disabled
-                      className="bg-gray-100 border-gray-300"
-                    />
-                  ) : (
-                    <Select
-                      value={editForm.driver || undefined}
-                      onValueChange={(value) => {
-                        console.log('Driver selected:', value);
-                        setEditForm({ ...editForm, driver: value });
-                      }}
-                    >
-                      <SelectTrigger id="driver" className="bg-white border-gray-300">
-                        <SelectValue placeholder="Select a driver" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-white border border-gray-200 z-[100]">
-                        {drivers.length === 0 ? (
-                          <div className="px-2 py-1.5 text-sm text-gray-500">No drivers available</div>
-                        ) : (
-                          drivers.map((driver) => (
-                            <SelectItem key={driver.id} value={driver.id.toString()}>
-                              {driver.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  )}
+                    </div>
                   </div>
                   <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <Label htmlFor="event_type" className="text-gray-700">Event Type</Label>
-                    {editForm.event_type && (
+                    <Label className="text-gray-700">Event Types</Label>
+                    <p className="text-xs text-gray-500 mb-1">Add one or more event type labels.</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {(editForm.event_types || []).map((name) => (
+                        <span
+                          key={name}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
+                        >
+                          {name}
+                          <button
+                            type="button"
+                            aria-label={`Remove event type ${name}`}
+                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
+                            onClick={() => setEditForm({ ...editForm, event_types: editForm.event_types.filter((v) => v !== name) })}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="Add event type"
+                        value={editEventTypeInput}
+                        onChange={(e) => setEditEventTypeInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const v = editEventTypeInput.trim();
+                            if (v && !editForm.event_types.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                              setEditForm({ ...editForm, event_types: [...editForm.event_types, v] });
+                              setEditEventTypeInput('');
+                            }
+                          }
+                        }}
+                        className="flex-1 bg-white border-gray-300"
+                      />
                       <Button
                         type="button"
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-6 px-2 text-xs text-gray-600 hover:text-gray-900"
-                        onClick={() => setEditForm({ ...editForm, event_type: '' })}
+                        className="border-gray-300"
+                        onClick={() => {
+                          const v = editEventTypeInput.trim();
+                          if (v && !editForm.event_types.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                            setEditForm({ ...editForm, event_types: [...editForm.event_types, v] });
+                            setEditEventTypeInput('');
+                          }
+                        }}
                       >
-                        Clear
+                        Add
                       </Button>
-                    )}
+                    </div>
                   </div>
-                  {loadingLookups ? (
-                    <Input
-                      id="event_type"
-                      type="text"
-                      value="Loading..."
-                      disabled
-                      className="bg-gray-100 border-gray-300"
-                    />
-                  ) : (
-                    <Select
-                      value={editForm.event_type || undefined}
-                      onValueChange={(value) => {
-                        console.log('Event type selected:', value);
-                        setEditForm({ ...editForm, event_type: value });
-                      }}
-                    >
-                      <SelectTrigger id="event_type" className="bg-white border-gray-300">
-                        <SelectValue placeholder="Select an event type" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-white border border-gray-200 z-[100]">
-                        {eventTypes.length === 0 ? (
-                          <div className="px-2 py-1.5 text-sm text-gray-500">No event types available</div>
-                        ) : (
-                          eventTypes.map((eventType) => (
-                            <SelectItem key={eventType.id} value={eventType.id.toString()}>
-                              {eventType.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  )}
+                  <div>
+                    <Label className="text-gray-700">Locations</Label>
+                    <p className="text-xs text-gray-500 mb-1">Add one or more location labels.</p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {(editForm.locations || []).map((name) => (
+                        <span
+                          key={name}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 text-gray-800 text-sm border border-gray-200"
+                        >
+                          {name}
+                          <button
+                            type="button"
+                            aria-label={`Remove location ${name}`}
+                            className="ml-0.5 text-gray-500 hover:text-red-600 focus:outline-none"
+                            onClick={() => setEditForm({ ...editForm, locations: editForm.locations.filter((v) => v !== name) })}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        placeholder="Add location"
+                        value={editLocationInput}
+                        onChange={(e) => setEditLocationInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const v = editLocationInput.trim();
+                            if (v && !editForm.locations.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                              setEditForm({ ...editForm, locations: [...editForm.locations, v] });
+                              setEditLocationInput('');
+                            }
+                          }
+                        }}
+                        className="flex-1 bg-white border-gray-300"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="border-gray-300"
+                        onClick={() => {
+                          const v = editLocationInput.trim();
+                          if (v && !editForm.locations.some((x) => x.toLowerCase() === v.toLowerCase())) {
+                            setEditForm({ ...editForm, locations: [...editForm.locations, v] });
+                            setEditLocationInput('');
+                          }
+                        }}
+                      >
+                        Add
+                      </Button>
+                    </div>
                   </div>
                   <div>
                     <Label className="text-gray-700">Tags</Label>

@@ -3,7 +3,7 @@
 :root {
   --background: #ffffff;
   --foreground: #111827;
-  
+
   --card: #ffffff;
   --card-foreground: #111827;
   --popover: #ffffff;
@@ -22,7 +22,7 @@
   --input: #ffffff;
   --ring: #9333ea;
   --radius: 0.5rem;
-  
+
   /* Purple accent colors */
   --purple-50: #faf5ff;
   --purple-100: #f3e8ff;

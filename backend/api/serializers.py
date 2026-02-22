@@ -1,96 +1,95 @@
 from rest_framework import serializers
-from .models import McapLog, Car, Driver, EventType
+from .models import McapLog
 
-class CarSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Car
-        fields = ['id', 'name']
 
-class DriverSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Driver
-        fields = ['id', 'name']
+def _normalize_string_array(values):
+    if not isinstance(values, list):
+        raise serializers.ValidationError("Expected a list of strings.")
 
-class EventTypeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = EventType
-        fields = ['id', 'name']
+    seen = set()
+    normalized = []
+    for value in values:
+        if not isinstance(value, str):
+            raise serializers.ValidationError("All items must be strings.")
+        item = value.strip()
+        if not item:
+            continue
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(item)
+    return normalized
+
 
 class McapLogSerializer(serializers.ModelSerializer):
-    # Read: return nested objects, Write: accept IDs
-    car = CarSerializer(read_only=True, allow_null=True)
-    driver = DriverSerializer(read_only=True, allow_null=True)
-    event_type = EventTypeSerializer(read_only=True, allow_null=True)
-    
-    # For write operations, accept IDs via car_id, driver_id, event_type_id
-    car_id = serializers.PrimaryKeyRelatedField(
-        queryset=Car.objects.all(), 
-        source='car',
-        write_only=True, 
-        allow_null=True, 
-        required=False
+    file = serializers.FileField(
+        write_only=True, required=False, help_text="MCAP file to upload and parse"
     )
-    driver_id = serializers.PrimaryKeyRelatedField(
-        queryset=Driver.objects.all(), 
-        source='driver',
-        write_only=True, 
-        allow_null=True, 
-        required=False
-    )
-    event_type_id = serializers.PrimaryKeyRelatedField(
-        queryset=EventType.objects.all(), 
-        source='event_type',
-        write_only=True, 
-        allow_null=True, 
-        required=False
-    )
-    file = serializers.FileField(write_only=True, required=False, help_text="MCAP file to upload and parse")
     file_name = serializers.CharField(required=False, allow_blank=True)
-    
-    
+    cars = serializers.ListField(child=serializers.CharField(), required=False)
+    drivers = serializers.ListField(child=serializers.CharField(), required=False)
+    event_types = serializers.ListField(child=serializers.CharField(), required=False)
+    locations = serializers.ListField(child=serializers.CharField(), required=False)
+    tags = serializers.ListField(child=serializers.CharField(), required=False)
+
     class Meta:
         model = McapLog
-        fields = ['id',
-                  'file_name',
-                  'created_at',
-                  'original_uri',
-                  'recovered_uri',
-                  'recovery_status',
-                  'parse_status',
-                  'parse_task_id',
-                  'captured_at',
-                  'start_time',
-                  'end_time',
-                  'duration_seconds',
-                  'channel_count',
-                  'channels',
-                  'file_size',
-                  'lap_path',
-                  'car',
-                  'driver',
-                  'event_type',
-                  'car_id',
-                  'driver_id',
-                  'event_type_id',
-                  'notes',
-                  'tags',
-                  'file'
-                  ]
-        
+        fields = [
+            "id",
+            "file_name",
+            "created_at",
+            "original_uri",
+            "recovered_uri",
+            "recovery_status",
+            "parse_status",
+            "parse_task_id",
+            "captured_at",
+            "start_time",
+            "end_time",
+            "duration_seconds",
+            "channel_count",
+            "channels",
+            "file_size",
+            "lap_path",
+            "notes",
+            "tags",
+            "cars",
+            "drivers",
+            "event_types",
+            "locations",
+            "file",
+        ]
+
+    def validate_tags(self, value):
+        return _normalize_string_array(value)
+
+    def validate_cars(self, value):
+        return _normalize_string_array(value)
+
+    def validate_drivers(self, value):
+        return _normalize_string_array(value)
+
+    def validate_event_types(self, value):
+        return _normalize_string_array(value)
+
+    def validate_locations(self, value):
+        return _normalize_string_array(value)
+
+
 class ParseSummaryRequestSerializer(serializers.Serializer):
     path = serializers.CharField()
-    
+
 
 class DownloadRequestSerializer(serializers.Serializer):
     ids = serializers.ListField(
         child=serializers.IntegerField(),
         min_length=1,
-        help_text="List of MCAP log IDs to download"
+        help_text="List of MCAP log IDs to download",
     )
     format = serializers.ChoiceField(
-        choices=['mcap', 'csv_omni', 'csv_tvn', 'ld'],
-        default='mcap',
+        choices=["mcap", "csv_omni", "csv_tvn", "ld"],
+        default="mcap",
         required=False,
-        help_text="Output format: 'mcap' for original files, 'csv_omni', 'csv_tvn', or 'ld' for conversion"
+        help_text="Output format: 'mcap' for original files, 'csv_omni', 'csv_tvn', or 'ld' for conversion",
     )
-
