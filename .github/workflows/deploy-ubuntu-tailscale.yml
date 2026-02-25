@@ -20,17 +20,17 @@ jobs:
       TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
 
     steps:
-      - name: Connect to Tailscale (OAuth)
+      - name: Connect Tailscale (OAuth)
         if: ${{ env.TS_OAUTH_CLIENT_ID != '' && env.TS_OAUTH_SECRET != '' }}
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4.1.1
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           args: --accept-dns=true
 
-      - name: Connect to Tailscale (auth key fallback)
+      - name: Connect Tailscale (auth key fallback)
         if: ${{ env.TS_OAUTH_CLIENT_ID == '' || env.TS_OAUTH_SECRET == '' }}
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4.1.1
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
           args: --accept-dns=true
