@@ -15,24 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
 
     steps:
-      - name: Connect Tailscale (OAuth)
-        if: ${{ env.TS_OAUTH_CLIENT_ID != '' && env.TS_OAUTH_SECRET != '' }}
+      - name: Connect Tailscale
         uses: tailscale/github-action@v4.1.1
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          args: --accept-dns=true
-
-      - name: Connect Tailscale (auth key fallback)
-        if: ${{ env.TS_OAUTH_CLIENT_ID == '' || env.TS_OAUTH_SECRET == '' }}
-        uses: tailscale/github-action@v4.1.1
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci
           args: --accept-dns=true
 
       - name: Configure SSH key
