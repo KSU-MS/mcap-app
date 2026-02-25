@@ -1,6 +1,6 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from .models import McapLog
+from .models import McapLog, ExportJob, ExportItem
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -8,10 +8,12 @@ from .serializers import (
     McapLogSerializer,
     ParseSummaryRequestSerializer,
     DownloadRequestSerializer,
+    ExportCreateRequestSerializer,
+    ExportJobSerializer,
 )
 from .parser import Parser
 from .gpsparse import GpsParser
-from .tasks import parse_mcap_file, recover_mcap_file
+from .tasks import parse_mcap_file, recover_mcap_file, enqueue_export_job
 import os
 import datetime
 import zipfile
@@ -229,6 +231,8 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
             # Set parse_status to pending - will be processed in background
             serializer.validated_data["parse_status"] = "pending"
+            serializer.validated_data["gps_status"] = "pending"
+            serializer.validated_data["map_preview_status"] = "pending"
         else:
             # If no file uploaded, ensure file_name is set if provided in request
             if (
@@ -418,6 +422,93 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
         # Handle MCAP download (original behavior)
         return self._download_as_mcap(mcap_logs)
+
+    @action(detail=False, methods=["post"], url_path="exports")
+    def create_export_job(self, request):
+        serializer = ExportCreateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data["ids"]
+        output_format = serializer.validated_data["format"]
+
+        logs = list(McapLog.objects.filter(id__in=ids))
+        found_ids = {l.id for l in logs}
+        missing_ids = sorted(set(ids) - found_ids)
+        if missing_ids:
+            return Response(
+                {"error": f"Log IDs not found: {missing_ids}"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        job = ExportJob.objects.create(
+            format=output_format,
+            status="pending",
+            requested_ids=ids,
+        )
+        ExportItem.objects.bulk_create(
+            [ExportItem(job=job, mcap_log=log, status="pending") for log in logs]
+        )
+        enqueue_export_job(job.id)
+
+        return Response(ExportJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"exports/(?P<job_id>[^/.]+)/status",
+    )
+    def export_status(self, request, job_id=None):
+        try:
+            job = ExportJob.objects.prefetch_related("items__mcap_log").get(id=job_id)
+        except ExportJob.DoesNotExist:
+            return Response(
+                {"error": f"Export job {job_id} not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(ExportJobSerializer(job).data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"exports/(?P<job_id>[^/.]+)/download",
+    )
+    def export_download(self, request, job_id=None):
+        try:
+            job = ExportJob.objects.get(id=job_id)
+        except ExportJob.DoesNotExist:
+            return Response(
+                {"error": f"Export job {job_id} not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if job.status not in ["completed", "completed_with_errors"] or not job.zip_uri:
+            return Response(
+                {
+                    "error": "Export job is not ready yet",
+                    "status": job.status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if not str(job.zip_uri).startswith(settings.MEDIA_URL):
+            return Response(
+                {"error": "Invalid export path"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        rel_path = str(job.zip_uri).replace(settings.MEDIA_URL, "", 1)
+        zip_path = Path(settings.MEDIA_ROOT) / rel_path
+        if not zip_path.exists():
+            return Response(
+                {"error": "Export bundle not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return FileResponse(
+            open(zip_path, "rb"),
+            as_attachment=True,
+            filename=f"export_job_{job.id}.zip",
+            content_type="application/zip",
+        )
 
     def _download_as_converted(self, mcap_logs, format):
         """
@@ -840,6 +931,8 @@ class McapLogViewSet(viewsets.ModelViewSet):
                     file_size=file_size,
                     parse_status="pending",
                     recovery_status="pending",
+                    gps_status="pending",
+                    map_preview_status="pending",
                 )
 
                 # Trigger recovery (which will trigger parsing when done)

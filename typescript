@@ -3691,3 +3691,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
  GET /?page=10 [32m200[39m in 9ms[2m (compile: 1397µs, render: 8ms)[22m
  GET /?page=11 [32m200[39m in 21ms[2m (compile: 3ms, render: 18ms)[22m
  GET /?page=1 [32m200[39m in 25ms[2m (compile: 9ms, render: 16ms)[22m
+[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+[?25h
+[?2004h(mcap-query-backend) frontend $ 

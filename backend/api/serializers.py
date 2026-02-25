@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import McapLog
+from .models import McapLog, ExportJob, ExportItem
 
 
 def _normalize_string_array(values):
@@ -44,6 +44,10 @@ class McapLogSerializer(serializers.ModelSerializer):
             "recovered_uri",
             "recovery_status",
             "parse_status",
+            "gps_status",
+            "gps_error",
+            "map_preview_status",
+            "map_preview_error",
             "parse_task_id",
             "captured_at",
             "start_time",
@@ -99,3 +103,66 @@ class DownloadRequestSerializer(serializers.Serializer):
         required=False,
         help_text="Output format: 'mcap' for original files, 'csv_omni', 'csv_tvn', or 'ld' for conversion",
     )
+
+
+class ExportCreateRequestSerializer(serializers.Serializer):
+    ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        min_length=1,
+        help_text="List of MCAP log IDs to export",
+    )
+    format = serializers.ChoiceField(
+        choices=["csv_omni", "csv_tvn", "ld"],
+        help_text="Asynchronous export format",
+    )
+
+
+class ExportItemSerializer(serializers.ModelSerializer):
+    mcap_log_id = serializers.IntegerField(source="mcap_log.id", read_only=True)
+    file_name = serializers.CharField(source="mcap_log.file_name", read_only=True)
+
+    class Meta:
+        model = ExportItem
+        fields = [
+            "id",
+            "mcap_log_id",
+            "file_name",
+            "status",
+            "output_uri",
+            "error_message",
+            "attempts",
+        ]
+
+
+class ExportJobSerializer(serializers.ModelSerializer):
+    items = ExportItemSerializer(many=True, read_only=True)
+    total_items = serializers.SerializerMethodField()
+    completed_items = serializers.SerializerMethodField()
+    failed_items = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExportJob
+        fields = [
+            "id",
+            "format",
+            "status",
+            "requested_ids",
+            "zip_uri",
+            "error_message",
+            "created_at",
+            "updated_at",
+            "completed_at",
+            "total_items",
+            "completed_items",
+            "failed_items",
+            "items",
+        ]
+
+    def get_total_items(self, obj):
+        return obj.items.count()
+
+    def get_completed_items(self, obj):
+        return obj.items.filter(status="completed").count()
+
+    def get_failed_items(self, obj):
+        return obj.items.filter(status="failed").count()

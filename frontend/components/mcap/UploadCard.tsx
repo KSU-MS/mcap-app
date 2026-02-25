@@ -5,12 +5,12 @@ import { uploadFiles } from '@/lib/mcap/api';
 
 interface Props {
     onUploaded: (ids: number[]) => void;
+    processingCount: number;
 }
 
-export function UploadCard({ onUploaded }: Props) {
+export function UploadCard({ onUploaded, processingCount }: Props) {
     const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
     const [uploading, setUploading] = useState(false);
-    const [processingIds, setProcessingIds] = useState<number[]>([]);
     const [error, setError] = useState<string | null>(null);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -32,7 +32,6 @@ export function UploadCard({ onUploaded }: Props) {
         try {
             const ids = await uploadFiles(selectedFiles);
             setSelectedFiles([]);
-            if (ids.length) setProcessingIds((p) => [...new Set([...p, ...ids])]);
             onUploaded(ids);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Upload failed');
@@ -114,13 +113,13 @@ export function UploadCard({ onUploaded }: Props) {
                     </button>
                 </div>
 
-                {processingIds.length > 0 && (
+                {processingCount > 0 && (
                     <div
                         className="mt-4 rounded-md px-4 py-2.5 text-sm flex items-center gap-2"
                         style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)', border: '1px solid rgba(122,90,26,0.25)' }}
                     >
                         <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                        Processing {processingIds.length} file{processingIds.length !== 1 ? 's' : ''}…
+                        Processing {processingCount} file{processingCount !== 1 ? 's' : ''}…
                     </div>
                 )}
 

@@ -7,7 +7,6 @@ export interface McapLog {
     channel_count?: number;
     channels?: string[];
     channels_summary?: string[];
-    rough_point?: string;
     cars?: string[];
     drivers?: string[];
     event_types?: string[];

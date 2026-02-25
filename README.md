@@ -11,6 +11,13 @@ A Django REST Framework backend for managing and parsing **Formula SAE telemetry
 - Celery worker (local, optional): `./scripts/dev_celery_local.sh`
 - Frontend: `cd frontend && pnpm install && pnpm run dev`
 
+### Run commands (Nix)
+- Enter dev shell: `nix develop`
+- Start Postgres + Redis: `./scripts/start-nix-services.sh start`
+- Run backend API: `python backend/manage.py runserver`
+- Run Celery on macOS (safe pool): `celery -A backend worker --loglevel=info --pool=threads --concurrency=4`
+- Run Celery on Linux (production): `celery -A backend worker --loglevel=info --pool=prefork --concurrency=8`
+
 The service automates:
 - Getting MCAP log files from the car’s onboard Pi
 - Running `mcap recover` on every uploaded file
@@ -18,7 +25,6 @@ The service automates:
   - Available channels (topics)
   - Start and end timestamps
   - Duration and channel count
-  - Rough GPS position (when available)
 - Storing all metadata in a relational database for easy querying
 
 Users can manually tag each log with:
@@ -49,7 +55,6 @@ Each MCAP file becomes one database record with:
 - `recovery_status` and `parse_status`
 - `captured_at`, `duration_seconds`, `channel_count`
 - `channels_summary` (JSON array of topics)
-- Optional GPS location (`rough_point`)
 - Optional tags for `car`, `driver`, `event_type`, `notes`
 
 This data can then be searched or displayed in a frontend dashboard  

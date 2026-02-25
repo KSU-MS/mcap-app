@@ -362,6 +362,7 @@ function McapDashboard() {
 
         {/* Upload */}
         <UploadCard
+          processingCount={processingIds.length}
           onUploaded={(ids) => {
             setProcessingIds((p) => [...new Set([...p, ...ids])]);
             loadLogs();
