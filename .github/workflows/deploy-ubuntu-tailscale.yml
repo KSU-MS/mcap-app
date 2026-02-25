@@ -18,13 +18,21 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
+          args: --accept-dns=true
 
+      - name: Configure SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Deploy over Tailscale SSH
+      - name: Add deploy host to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H "konnoth-homeserver" >> ~/.ssh/known_hosts
-          tailscale ssh "pettrus@konnoth-homeserver" "bash -s" <<'EOF'
+
+      - name: Deploy over SSH
+        run: |
+          ssh "pettrus@konnoth-homeserver" "bash -s" <<'EOF'
           set -euo pipefail
 
           cd /home/pettrus/mcap_query_backend
