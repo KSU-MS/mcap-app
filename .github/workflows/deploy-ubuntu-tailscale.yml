@@ -1,0 +1,78 @@
+name: Deploy Ubuntu (Tailscale)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (branch, tag, or SHA)"
+        required: false
+        default: "main"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          args: --accept-dns=true
+
+      - name: Configure SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add deploy host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_REPO_DIR: ${{ secrets.DEPLOY_REPO_DIR }}
+          DEPLOY_REF: ${{ github.event.inputs.ref || github.sha }}
+          BACKEND_SERVICE: ${{ vars.BACKEND_SERVICE }}
+          CELERY_SERVICE: ${{ vars.CELERY_SERVICE }}
+          HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL }}
+        run: |
+          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "DEPLOY_REPO_DIR='${DEPLOY_REPO_DIR}' DEPLOY_REF='${DEPLOY_REF}' BACKEND_SERVICE='${BACKEND_SERVICE}' CELERY_SERVICE='${CELERY_SERVICE}' HEALTHCHECK_URL='${HEALTHCHECK_URL}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          REPO_DIR="${DEPLOY_REPO_DIR}"
+          DEPLOY_REF="${DEPLOY_REF}"
+
+          if [ -z "${REPO_DIR}" ]; then
+            echo "DEPLOY_REPO_DIR is empty"
+            exit 1
+          fi
+
+          cd "${REPO_DIR}"
+          git fetch --all --tags
+          git checkout "${DEPLOY_REF}"
+
+          nix develop --command bash -lc "python backend/manage.py migrate"
+
+          if [ -n "${BACKEND_SERVICE:-}" ]; then
+            sudo systemctl restart "${BACKEND_SERVICE}"
+            sudo systemctl status "${BACKEND_SERVICE}" --no-pager --lines=20
+          fi
+
+          if [ -n "${CELERY_SERVICE:-}" ]; then
+            sudo systemctl restart "${CELERY_SERVICE}"
+            sudo systemctl status "${CELERY_SERVICE}" --no-pager --lines=20
+          fi
+
+          if [ -n "${HEALTHCHECK_URL:-}" ]; then
+            curl -fsS "${HEALTHCHECK_URL}" >/dev/null
+            echo "Healthcheck passed: ${HEALTHCHECK_URL}"
+          fi
+          EOF
