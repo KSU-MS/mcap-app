@@ -13,7 +13,6 @@ interface MapCellProps {
 /**
  * A static CSS map thumbnail for every table row.
  * Clicking fetches GeoJSON and opens the full Leaflet MapModal.
- * No rough_point / coordinate parsing needed.
  */
 export const MapCell = memo(function MapCell({ logId, mapPreviewUri, mapDataAvailable = true, onViewMap }: MapCellProps) {
     const [loading, setLoading] = useState(false);

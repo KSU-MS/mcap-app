@@ -49,7 +49,6 @@ export function ViewModal({ log, open, loading, onClose, onViewMap }: Props) {
                                     ['Captured At', log.captured_at ? new Date(log.captured_at).toLocaleString() : undefined],
                                     ['Duration', log.duration_seconds ? `${log.duration_seconds.toFixed(1)}s` : undefined],
                                     ['Channel Count', log.channel_count],
-                                    ['Rough Point', log.rough_point],
                                     ['Car(s)', normalizeList(log.cars).join(', ')],
                                     ['Driver(s)', normalizeList(log.drivers).join(', ')],
                                     ['Event Type(s)', normalizeList(log.event_types).join(', ')],

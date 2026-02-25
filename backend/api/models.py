@@ -8,6 +8,10 @@ class McapLog(models.Model):
     recovered_uri = models.CharField(default="pending")
     recovery_status = models.CharField(default="pending")
     parse_status = models.CharField(default="pending")
+    gps_status = models.CharField(default="pending", max_length=255)
+    gps_error = models.TextField(null=True, blank=True)
+    map_preview_status = models.CharField(default="pending", max_length=255)
+    map_preview_error = models.TextField(null=True, blank=True)
     parse_task_id = models.CharField(
         max_length=255,
         null=True,
@@ -58,3 +62,28 @@ class McapLog(models.Model):
         blank=True,
         help_text="Immutable SVG map preview URI",
     )
+
+
+class ExportJob(models.Model):
+    format = models.CharField(max_length=20)
+    status = models.CharField(default="pending", max_length=20)
+    requested_ids = models.JSONField(default=list, blank=True)
+    zip_uri = models.CharField(max_length=500, null=True, blank=True)
+    error_message = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+
+class ExportItem(models.Model):
+    job = models.ForeignKey(ExportJob, on_delete=models.CASCADE, related_name="items")
+    mcap_log = models.ForeignKey(McapLog, on_delete=models.CASCADE)
+    status = models.CharField(default="pending", max_length=20)
+    output_uri = models.CharField(max_length=500, null=True, blank=True)
+    error_message = models.TextField(null=True, blank=True)
+    attempts = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("job", "mcap_log")

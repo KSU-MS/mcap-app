@@ -45,7 +45,7 @@ export function DownloadModal({
                                 <SelectItem value="mcap">MCAP (original)</SelectItem>
                                 <SelectItem value="csv_omni">CSV (omni)</SelectItem>
                                 <SelectItem value="csv_tvn">CSV (tvn)</SelectItem>
-                                <SelectItem value="ld">LD (i2)</SelectItem>
+                                <SelectItem value="ld">LD (i2) (not yet)</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
