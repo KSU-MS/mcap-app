@@ -22,7 +22,7 @@ jobs:
 
       - name: Deploy over Tailscale SSH
         run: |
-          tailscale ssh "pettrus@konnoth-homeserver" "bash -s" <<'EOF'
+          ssh -o StrictHostKeyChecking=no "pettrus@konnoth-homeserver" "bash -s" <<'EOF'
           set -euo pipefail
 
           cd /home/pettrus/mcap_query_backend
