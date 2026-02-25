@@ -22,10 +22,10 @@ jobs:
 
       - name: Deploy over Tailscale SSH
         run: |
-          tailscale ssh --accept-risk=lose-ssh "ubuntu@konnoth-homeserver" "bash -s" <<'EOF'
+          tailscale ssh "pettrus@konnoth-homeserver" "bash -s" <<'EOF'
           set -euo pipefail
 
-          cd /home/ubuntu/mcap_query_backend
+          cd /home/pettrus/mcap_query_backend
 
           nix develop --command bash -lc "./scripts/start-nix-services.sh start"
 
