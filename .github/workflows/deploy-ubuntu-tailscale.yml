@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Git ref to deploy (branch, tag, or SHA)"
-        required: false
-        default: "main"
 
 jobs:
   deploy:
@@ -20,61 +15,21 @@ jobs:
       - name: Connect Tailscale
         uses: tailscale/github-action@v4.1.1
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
+          authkey: ${{ secrets.TS_AUTHKEY }}
           args: --accept-dns=true
 
-      - name: Configure SSH key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-
-      - name: Add deploy host to known_hosts
+      - name: Deploy over Tailscale SSH
         run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
-
-      - name: Deploy over SSH
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_REPO_DIR: ${{ secrets.DEPLOY_REPO_DIR }}
-          DEPLOY_REF: ${{ github.event.inputs.ref || github.sha }}
-          BACKEND_SERVICE: ${{ vars.BACKEND_SERVICE }}
-          CELERY_SERVICE: ${{ vars.CELERY_SERVICE }}
-          HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL }}
-        run: |
-          ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "DEPLOY_REPO_DIR='${DEPLOY_REPO_DIR}' DEPLOY_REF='${DEPLOY_REF}' BACKEND_SERVICE='${BACKEND_SERVICE}' CELERY_SERVICE='${CELERY_SERVICE}' HEALTHCHECK_URL='${HEALTHCHECK_URL}' bash -s" <<'EOF'
+          tailscale ssh --accept-risk=lose-ssh "ubuntu@konnoth-homeserver" "bash -s" <<'EOF'
           set -euo pipefail
 
-          REPO_DIR="${DEPLOY_REPO_DIR}"
-          DEPLOY_REF="${DEPLOY_REF}"
+          cd /home/ubuntu/mcap_query_backend
 
-          if [ -z "${REPO_DIR}" ]; then
-            echo "DEPLOY_REPO_DIR is empty"
-            exit 1
-          fi
+          nix develop --command bash -lc "./scripts/start-nix-services.sh start"
 
-          cd "${REPO_DIR}"
-          git fetch --all --tags
-          git checkout "${DEPLOY_REF}"
+          pkill -f "manage.py runserver" || true
+          nohup nix develop --command bash -lc "python backend/manage.py runserver 0.0.0.0:8000" >/tmp/backend.log 2>&1 &
 
-          nix develop --command bash -lc "python backend/manage.py migrate"
-
-          if [ -n "${BACKEND_SERVICE:-}" ]; then
-            sudo systemctl restart "${BACKEND_SERVICE}"
-            sudo systemctl status "${BACKEND_SERVICE}" --no-pager --lines=20
-          fi
-
-          if [ -n "${CELERY_SERVICE:-}" ]; then
-            sudo systemctl restart "${CELERY_SERVICE}"
-            sudo systemctl status "${CELERY_SERVICE}" --no-pager --lines=20
-          fi
-
-          if [ -n "${HEALTHCHECK_URL:-}" ]; then
-            curl -fsS "${HEALTHCHECK_URL}" >/dev/null
-            echo "Healthcheck passed: ${HEALTHCHECK_URL}"
-          fi
+          pkill -f "next start" || true
+          nohup nix develop --command bash -lc "cd frontend && pnpm install && pnpm build && pnpm start -p 3000" >/tmp/frontend.log 2>&1 &
           EOF
