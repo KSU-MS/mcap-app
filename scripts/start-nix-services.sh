@@ -8,6 +8,7 @@ NIX_DATA_DIR="${NIX_DATA_DIR:-$ROOT/.nix-data}"
 PGDATA="$NIX_DATA_DIR/postgres"
 REDIS_DIR="$NIX_DATA_DIR/redis"
 POSTGRES_PORT="${POSTGRES_PORT:-5433}"
+POSTGRES_SOCKET_DIR="${POSTGRES_SOCKET_DIR:-/tmp}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-mcap_query_db}"
@@ -19,7 +20,7 @@ command -v redis-server >/dev/null 2>&1 || { echo "redis-server not on PATH. Run
 
 case "${1:-start}" in
   start)
-    mkdir -p "$NIX_DATA_DIR" "$REDIS_DIR"
+    mkdir -p "$NIX_DATA_DIR" "$REDIS_DIR" "$POSTGRES_SOCKET_DIR"
 
     # Postgres: init if needed, then start
     if [[ ! -f "$PGDATA/PG_VERSION" ]]; then
@@ -28,7 +29,7 @@ case "${1:-start}" in
     fi
     if ! pg_ctl -D "$PGDATA" status >/dev/null 2>&1; then
       echo "Starting Postgres on port $POSTGRES_PORT ..."
-      pg_ctl -D "$PGDATA" -o "-p $POSTGRES_PORT" -l "$PGDATA/logfile" start
+      pg_ctl -D "$PGDATA" -o "-p $POSTGRES_PORT -k $POSTGRES_SOCKET_DIR" -l "$PGDATA/logfile" start
       sleep 2
       createdb -h localhost -p "$POSTGRES_PORT" -U "$POSTGRES_USER" "$POSTGRES_DB" 2>/dev/null || true
     else
