@@ -97,12 +97,21 @@
           export PS1="(mcap-query-backend) \\W \$ "
           # Avoid PYTHONPATH leaks from Python builders
           unset PYTHONPATH
+          export REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+          # Auto-load local env overrides when present
+          if [[ -f "$REPO_ROOT/.env" ]]; then
+            set -a
+            source "$REPO_ROOT/.env"
+            set +a
+          fi
+
           export GDAL_LIBRARY_PATH="${gdalLib}"
           export GEOS_LIBRARY_PATH="${geosLib}"
-          export POSTGRES_DB="mcap_query_db"
-          export POSTGRES_USER="postgres"
-          export POSTGRES_PASSWORD="postgres"
-          export POSTGRES_HOST="localhost"
+          export POSTGRES_DB="''${POSTGRES_DB:-mcap_query_db}"
+          export POSTGRES_USER="''${POSTGRES_USER:-postgres}"
+          export POSTGRES_PASSWORD="''${POSTGRES_PASSWORD:-postgres}"
+          export POSTGRES_HOST="''${POSTGRES_HOST:-localhost}"
           export POSTGRES_PORT="''${POSTGRES_PORT:-5433}"
           export REDIS_HOST="''${REDIS_HOST:-localhost}"
           export REDIS_PORT="''${REDIS_PORT:-6379}"
@@ -111,7 +120,6 @@
           export FRONTEND_PORT="''${FRONTEND_PORT:-3000}"
           export CELERY_BROKER_URL="''${CELERY_BROKER_URL:-redis://$REDIS_HOST:$REDIS_PORT/0}"
           export CELERY_RESULT_BACKEND="''${CELERY_RESULT_BACKEND:-redis://$REDIS_HOST:$REDIS_PORT/0}"
-          export REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
           ${lib.optionalString stdenv.isDarwin ''
             export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:}$DYLD_LIBRARY_PATH"
           ''}
