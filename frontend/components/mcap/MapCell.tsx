@@ -2,6 +2,7 @@
 
 import { useState, memo } from 'react';
 import { Loader2 } from 'lucide-react';
+import Image, { type ImageLoaderProps } from 'next/image';
 
 interface MapCellProps {
     logId: number;
@@ -16,6 +17,7 @@ interface MapCellProps {
  */
 export const MapCell = memo(function MapCell({ logId, mapPreviewUri, mapDataAvailable = true, onViewMap }: MapCellProps) {
     const [loading, setLoading] = useState(false);
+    const passthroughLoader = ({ src }: ImageLoaderProps) => src;
 
     const handleClick = async () => {
         setLoading(true);
@@ -87,12 +89,15 @@ export const MapCell = memo(function MapCell({ logId, mapPreviewUri, mapDataAvai
             }}
         >
             {mapPreviewUri ? (
-                <img
+                <Image
+                    loader={passthroughLoader}
+                    unoptimized
                     src={mapPreviewUri}
                     alt={`Map preview for log ${logId}`}
+                    width={82}
+                    height={64}
                     loading="lazy"
                     style={{
-                        flex: 1,
                         width: '100%',
                         height: '100%',
                         objectFit: 'cover',

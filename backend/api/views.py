@@ -13,7 +13,7 @@ from .serializers import (
 )
 from .parser import Parser
 from .gpsparse import GpsParser
-from .tasks import parse_mcap_file, recover_mcap_file, enqueue_export_job
+from .tasks import recover_mcap_file, enqueue_export_job
 import os
 import datetime
 import zipfile
@@ -354,9 +354,6 @@ class McapLogViewSet(viewsets.ModelViewSet):
             # Return full unsimplified path
             simplified_path = lap_path
 
-        # Build GeoJSON FeatureCollection
-        import json
-
         features = []
 
         # Add simplified path as LineString
@@ -384,7 +381,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
         """
         Download selected MCAP log files as a ZIP archive.
         Accepts a POST request with a list of log IDs and optional format in the request body.
-        Example: {"ids": [1, 2, 3], "format": "csv_omni"}
+        Example: {"ids": [1, 2, 3], "format": "csv_omni", "resample_hz": 50}
         Formats: "mcap" (default, original files), "csv_omni", "csv_tvn", "ld"
         """
         serializer = DownloadRequestSerializer(data=request.data)
@@ -392,6 +389,9 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
         log_ids = serializer.validated_data["ids"]
         output_format = serializer.validated_data.get("format", "mcap")
+        resample_hz = serializer.validated_data.get(
+            "resample_hz", settings.MOTEC_RESAMPLE_HZ_DEFAULT
+        )
 
         # Get the McapLog objects
         mcap_logs = McapLog.objects.filter(id__in=log_ids)
@@ -416,9 +416,9 @@ class McapLogViewSet(viewsets.ModelViewSet):
         # Handle CSV/LD conversion
         if output_format.startswith("csv_") or output_format == "ld":
             print(
-                f"[download] CSV/LD conversion requested: ids={log_ids}, count={len(mcap_logs)}, format={output_format}"
+                f"[download] CSV/LD conversion requested: ids={log_ids}, count={len(mcap_logs)}, format={output_format}, resample_hz={resample_hz}"
             )
-            return self._download_as_converted(mcap_logs, output_format)
+            return self._download_as_converted(mcap_logs, output_format, resample_hz)
 
         # Handle MCAP download (original behavior)
         return self._download_as_mcap(mcap_logs)
@@ -429,9 +429,12 @@ class McapLogViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         ids = serializer.validated_data["ids"]
         output_format = serializer.validated_data["format"]
+        resample_hz = serializer.validated_data.get(
+            "resample_hz", settings.MOTEC_RESAMPLE_HZ_DEFAULT
+        )
 
         logs = list(McapLog.objects.filter(id__in=ids))
-        found_ids = {l.id for l in logs}
+        found_ids = {log.id for log in logs}
         missing_ids = sorted(set(ids) - found_ids)
         if missing_ids:
             return Response(
@@ -441,6 +444,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
         job = ExportJob.objects.create(
             format=output_format,
+            resample_hz=resample_hz,
             status="pending",
             requested_ids=ids,
         )
@@ -510,7 +514,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
             content_type="application/zip",
         )
 
-    def _download_as_converted(self, mcap_logs, format):
+    def _download_as_converted(self, mcap_logs, format, resample_hz=None):
         """
         Convert MCAP files to CSV/LD and download as ZIP.
         Uses synchronous conversion (can be switched to async Celery if needed).
@@ -520,7 +524,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
         import datetime
 
         print(
-            f"[download] CSV conversion started: format={format}, count={len(mcap_logs)}"
+            f"[download] CSV conversion started: format={format}, count={len(mcap_logs)}, resample_hz={resample_hz}"
         )
         conversion_results = {}
         conversion_errors = []
@@ -591,7 +595,10 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 # Convert MCAP to CSV/LD synchronously
                 converter = McapToCsvConverter()
                 converter.convert_to_csv(
-                    str(file_path), str(output_path), format=format_suffix
+                    str(file_path),
+                    str(output_path),
+                    format=format_suffix,
+                    resample_hz=resample_hz,
                 )
 
                 # Return the path relative to MEDIA_ROOT
@@ -709,7 +716,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
             if "temp_file_path" in locals() and os.path.exists(temp_file_path):
                 try:
                     os.unlink(temp_file_path)
-                except:
+                except Exception:
                     pass
 
             import traceback
@@ -827,7 +834,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
             if "temp_file_path" in locals() and os.path.exists(temp_file_path):
                 try:
                     os.unlink(temp_file_path)
-                except:
+                except Exception:
                     pass
 
             # Log the full error for debugging

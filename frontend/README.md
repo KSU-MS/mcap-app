@@ -2,6 +2,13 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+Set frontend API configuration (optional if backend is on port 8000):
+
+```bash
+cp .env.example .env.local
+# then edit NEXT_PUBLIC_API_BASE_URL as needed
+```
+
 First, run the development server:
 
 ```bash

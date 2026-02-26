@@ -103,6 +103,13 @@ class DownloadRequestSerializer(serializers.Serializer):
         required=False,
         help_text="Output format: 'mcap' for original files, 'csv_omni', 'csv_tvn', or 'ld' for conversion",
     )
+    resample_hz = serializers.FloatField(
+        required=False,
+        default=20.0,
+        min_value=1.0,
+        max_value=500.0,
+        help_text="Target fixed resample rate in Hz for converted formats",
+    )
 
 
 class ExportCreateRequestSerializer(serializers.Serializer):
@@ -114,6 +121,13 @@ class ExportCreateRequestSerializer(serializers.Serializer):
     format = serializers.ChoiceField(
         choices=["csv_omni", "csv_tvn", "ld"],
         help_text="Asynchronous export format",
+    )
+    resample_hz = serializers.FloatField(
+        required=False,
+        default=20.0,
+        min_value=1.0,
+        max_value=500.0,
+        help_text="Target fixed resample rate in Hz for converted formats",
     )
 
 
@@ -145,6 +159,7 @@ class ExportJobSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "format",
+            "resample_hz",
             "status",
             "requested_ids",
             "zip_uri",

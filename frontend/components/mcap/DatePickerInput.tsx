@@ -78,12 +78,6 @@ export function DatePickerInput({
     const containerRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    // Sync display when value changes externally (e.g. Clear All)
-    useEffect(() => {
-        setInputVal(value ? formatDisplay(value) : '');
-        setInputError(false);
-    }, [value]);
-
     // Close popover on outside click
     useEffect(() => {
         if (!open) return;

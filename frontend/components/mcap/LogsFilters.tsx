@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search } from 'lucide-react';
@@ -25,6 +25,7 @@ export function LogsFilters({ lookups }: Props) {
     const router = useRouter();
     const params = useSearchParams();
     const [isPending, startTransition] = useTransition();
+    const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const update = useCallback(
         (key: string, value: string) => {
@@ -51,6 +52,19 @@ export function LogsFilters({ lookups }: Props) {
 
     const hasFilters = FILTER_KEYS.some((k) => params.has(k));
 
+    const handleSearchChange = (value: string) => {
+        if (searchDebounceRef.current) {
+            clearTimeout(searchDebounceRef.current);
+        }
+        searchDebounceRef.current = setTimeout(() => update('search', value), 300);
+    };
+
+    useEffect(() => {
+        return () => {
+            if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+        };
+    }, []);
+
     return (
         <div>
             {/* Search — full width */}
@@ -62,14 +76,10 @@ export function LogsFilters({ lookups }: Props) {
                 <input
                     type="text"
                     placeholder="Search by ID, car, driver, event type, notes…"
-                    defaultValue={params.get('search') ?? ''}
+                        defaultValue={params.get('search') ?? ''}
                     className="skeuo-input w-full"
                     style={{ paddingLeft: '2.25rem' }}
-                    onChange={(e) => {
-                        const v = e.target.value;
-                        clearTimeout((e.target as any)._t);
-                        (e.target as any)._t = setTimeout(() => update('search', v), 300);
-                    }}
+                    onChange={(e) => handleSearchChange(e.target.value)}
                 />
             </div>
 
@@ -79,6 +89,7 @@ export function LogsFilters({ lookups }: Props) {
                 <div className="flex flex-wrap items-end gap-2">
                     <FilterGroup label="From">
                         <DatePickerInput
+                            key={`start-date-${params.get('start_date') ?? ''}`}
                             value={params.get('start_date') ?? ''}
                             onChange={(v) => update('start_date', v)}
                             placeholder="Start date"
@@ -88,6 +99,7 @@ export function LogsFilters({ lookups }: Props) {
 
                     <FilterGroup label="To">
                         <DatePickerInput
+                            key={`end-date-${params.get('end_date') ?? ''}`}
                             value={params.get('end_date') ?? ''}
                             onChange={(v) => update('end_date', v)}
                             placeholder="End date"

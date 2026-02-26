@@ -66,6 +66,7 @@ class McapLog(models.Model):
 
 class ExportJob(models.Model):
     format = models.CharField(max_length=20)
+    resample_hz = models.FloatField(default=20.0)
     status = models.CharField(default="pending", max_length=20)
     requested_ids = models.JSONField(default=list, blank=True)
     zip_uri = models.CharField(max_length=500, null=True, blank=True)

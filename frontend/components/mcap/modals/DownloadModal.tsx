@@ -3,23 +3,29 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import type { DownloadFormat } from '@/lib/mcap/types';
+import type { DownloadFormat, ResampleRateHz } from '@/lib/mcap/types';
+
+const RESAMPLE_RATES: ResampleRateHz[] = [10, 20, 50, 100];
 
 interface Props {
     open: boolean;
     selectedCount: number;
     format: DownloadFormat;
+    resampleHz: ResampleRateHz;
     downloading: boolean;
     error: string | null;
     onFormatChange: (f: DownloadFormat) => void;
+    onResampleChange: (hz: ResampleRateHz) => void;
     onClose: () => void;
     onDownload: () => void;
 }
 
 export function DownloadModal({
-    open, selectedCount, format, downloading, error,
-    onFormatChange, onClose, onDownload,
+    open, selectedCount, format, resampleHz, downloading, error,
+    onFormatChange, onResampleChange, onClose, onDownload,
 }: Props) {
+    const showResampleSelector = format !== 'mcap';
+
     return (
         <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
             <DialogContent className="max-w-sm">
@@ -50,6 +56,31 @@ export function DownloadModal({
                         </Select>
                     </div>
 
+                    {showResampleSelector && (
+                        <div>
+                            <Label className="text-xs font-semibold uppercase tracking-wide mb-1 block" style={{ color: 'var(--sienna)' }}>
+                                Resample rate
+                            </Label>
+                            <Select
+                                value={String(resampleHz)}
+                                onValueChange={(v) => onResampleChange(Number(v) as ResampleRateHz)}
+                                disabled={downloading}
+                            >
+                                <SelectTrigger className="w-full" style={{ background: 'var(--off-white)' }}>
+                                    <SelectValue placeholder="Select rate" />
+                                </SelectTrigger>
+                                <SelectContent style={{ background: 'var(--off-white)' }}>
+                                    {RESAMPLE_RATES.map((rate) => (
+                                        <SelectItem key={rate} value={String(rate)}>{rate} Hz</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="mt-1 text-xs" style={{ color: 'var(--sienna)' }}>
+                                Higher rates are smoother but produce larger files.
+                            </p>
+                        </div>
+                    )}
+
                     {error && <p className="text-sm" style={{ color: 'var(--danger)' }}>{error}</p>}
 
                     {downloading && (
@@ -58,7 +89,9 @@ export function DownloadModal({
                             style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)', border: '1px solid rgba(122,90,26,0.25)' }}
                         >
                             <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                            {format === 'mcap' ? 'Preparing ZIP…' : `Converting to ${format.replace('csv_', '').toUpperCase()} and zipping…`}
+                            {format === 'mcap'
+                                ? 'Preparing ZIP…'
+                                : `Converting to ${format.replace('csv_', '').toUpperCase()} at ${resampleHz}Hz and zipping…`}
                         </div>
                     )}
                 </div>

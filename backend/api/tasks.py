@@ -163,7 +163,7 @@ def recover_mcap_file(self, mcap_log_id, file_path):
             mcap_log = McapLog.objects.get(id=mcap_log_id)
             mcap_log.recovery_status = "error: timeout after 5 minutes"
             mcap_log.save(update_fields=["recovery_status"])
-        except:
+        except Exception:
             pass
         return f"Recovery timed out for log {mcap_log_id}"
     except Exception as e:
@@ -172,7 +172,7 @@ def recover_mcap_file(self, mcap_log_id, file_path):
             mcap_log = McapLog.objects.get(id=mcap_log_id)
             mcap_log.recovery_status = f"error: {str(e)}"
             mcap_log.save(update_fields=["recovery_status"])
-        except:
+        except Exception:
             pass
 
         # Retry the task if it's a retryable error
@@ -232,7 +232,7 @@ def parse_mcap_file(self, mcap_log_id, file_path):
             mcap_log.save(
                 update_fields=["parse_status", "gps_status", "map_preview_status"]
             )
-        except:
+        except Exception:
             pass
 
         # Retry the task if it's a retryable error
@@ -373,6 +373,9 @@ def convert_export_item(self, export_item_id):
             if item.job.format.startswith("csv_")
             else item.job.format
         )
+        resample_hz = getattr(
+            item.job, "resample_hz", settings.MOTEC_RESAMPLE_HZ_DEFAULT
+        )
         file_extension = "ld" if format_suffix == "ld" else "csv"
 
         export_dir = Path(settings.MEDIA_ROOT) / "exports" / str(item.job_id)
@@ -382,7 +385,10 @@ def convert_export_item(self, export_item_id):
 
         converter = McapToCsvConverter()
         converter.convert_to_csv(
-            str(source_path), str(output_path), format=format_suffix
+            str(source_path),
+            str(output_path),
+            format=format_suffix,
+            resample_hz=resample_hz,
         )
 
         relpath = output_path.relative_to(settings.MEDIA_ROOT).as_posix()
@@ -493,7 +499,7 @@ def enqueue_export_job(export_job_id):
 
 
 @shared_task(bind=True, max_retries=3)
-def convert_mcap_to_csv(self, mcap_log_id, format="omni"):
+def convert_mcap_to_csv(self, mcap_log_id, format="omni", resample_hz=None):
     """
     Background task to convert an MCAP file to CSV/LD format.
 
@@ -540,6 +546,9 @@ def convert_mcap_to_csv(self, mcap_log_id, format="omni"):
         converted_dir = Path(settings.MEDIA_ROOT) / "converted"
         converted_dir.mkdir(parents=True, exist_ok=True)
 
+        if resample_hz is None:
+            resample_hz = settings.MOTEC_RESAMPLE_HZ_DEFAULT
+
         # Generate output filename
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         format_suffix = (
@@ -552,7 +561,12 @@ def convert_mcap_to_csv(self, mcap_log_id, format="omni"):
 
         # Convert MCAP to CSV/LD
         converter = McapToCsvConverter()
-        converter.convert_to_csv(str(file_path), str(output_path), format=format_suffix)
+        converter.convert_to_csv(
+            str(file_path),
+            str(output_path),
+            format=format_suffix,
+            resample_hz=resample_hz,
+        )
 
         # Return the path relative to MEDIA_ROOT for easy access
         relative_path = output_path.relative_to(settings.MEDIA_ROOT)

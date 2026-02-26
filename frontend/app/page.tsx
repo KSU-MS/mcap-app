@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import 'leaflet/dist/leaflet.css';
@@ -19,7 +19,7 @@ import {
   fetchLogs, fetchLog, fetchGeoJson, fetchLookups,
   updateLog, deleteLogs, bulkDownload, checkDbStatus,
 } from '@/lib/mcap/api';
-import type { McapLog, DownloadFormat } from '@/lib/mcap/types';
+import type { McapLog, DownloadFormat, GeoJsonFeatureCollection, ResampleRateHz } from '@/lib/mcap/types';
 
 const PAGE_SIZE = 10;
 
@@ -82,12 +82,13 @@ function McapDashboard() {
 
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [downloadFormat, setDownloadFormat] = useState<DownloadFormat>('mcap');
+  const [downloadResampleHz, setDownloadResampleHz] = useState<ResampleRateHz>(20);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const [mapOpen, setMapOpen] = useState(false);
   const [mapLogId, setMapLogId] = useState<number | null>(null);
-  const [geoJsonData, setGeoJsonData] = useState<any>(null);
+  const [geoJsonData, setGeoJsonData] = useState<GeoJsonFeatureCollection | null>(null);
 
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -100,7 +101,10 @@ function McapDashboard() {
   // ── Chime ──
   const playChime = () => {
     try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioContextClass = window.AudioContext
+        ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
       const tone = (freq: number, start: number, dur: number) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -270,7 +274,7 @@ function McapDashboard() {
     setDownloading(true);
     setDownloadError(null);
     try {
-      await bulkDownload(selectedIds, downloadFormat);
+      await bulkDownload(selectedIds, downloadFormat, downloadResampleHz);
       setDownloadOpen(false);
       playChime();
       showToast('Download complete!');
@@ -390,8 +394,6 @@ function McapDashboard() {
               processingIds={processingIds}
               currentPage={currentPage}
               totalPages={totalPages}
-              totalCount={totalCount}
-              pageSize={PAGE_SIZE}
               loading={loading}
               onToggleAll={toggleAll}
               onToggle={toggleSelect}
@@ -431,9 +433,11 @@ function McapDashboard() {
         open={downloadOpen}
         selectedCount={selectedIds.length}
         format={downloadFormat}
+        resampleHz={downloadResampleHz}
         downloading={downloading}
         error={downloadError}
         onFormatChange={setDownloadFormat}
+        onResampleChange={setDownloadResampleHz}
         onClose={() => setDownloadOpen(false)}
         onDownload={handleDownload}
       />

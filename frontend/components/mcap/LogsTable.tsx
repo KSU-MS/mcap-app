@@ -11,8 +11,6 @@ interface Props {
     processingIds: number[];
     currentPage: number;
     totalPages: number;
-    totalCount: number;
-    pageSize: number;
     loading: boolean;
     onToggleAll: () => void;
     onToggle: (id: number) => void;
@@ -185,8 +183,6 @@ export function LogsTable({
     processingIds,
     currentPage,
     totalPages,
-    totalCount,
-    pageSize,
     loading,
     onToggleAll,
     onToggle,

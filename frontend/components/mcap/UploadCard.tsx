@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { uploadFiles } from '@/lib/mcap/api';
 
 interface Props {

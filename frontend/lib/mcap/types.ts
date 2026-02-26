@@ -40,3 +40,20 @@ export interface LogFilters {
 }
 
 export type DownloadFormat = 'mcap' | 'csv_omni' | 'csv_tvn' | 'ld';
+export type ResampleRateHz = 10 | 20 | 50 | 100;
+
+export interface GeoJsonGeometry {
+    type: string;
+    coordinates?: unknown;
+}
+
+export interface GeoJsonFeature {
+    type: string;
+    geometry?: GeoJsonGeometry | null;
+    properties?: Record<string, unknown>;
+}
+
+export interface GeoJsonFeatureCollection {
+    type: string;
+    features?: GeoJsonFeature[];
+}

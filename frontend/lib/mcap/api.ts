@@ -1,6 +1,17 @@
-import type { McapLog, PaginatedResponse, LogFilters, DownloadFormat } from './types';
+import type {
+    McapLog,
+    PaginatedResponse,
+    LogFilters,
+    DownloadFormat,
+    GeoJsonFeatureCollection,
+} from './types';
 
-export const API_BASE_URL = 'http://127.0.0.1:8000';
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+
+export const API_BASE_URL = (configuredApiBaseUrl && configuredApiBaseUrl.length > 0
+    ? configuredApiBaseUrl
+    : 'http://127.0.0.1:8000'
+).replace(/\/+$/, '');
 
 function withApiBase(path?: string): string | undefined {
     if (!path) return undefined;
@@ -47,10 +58,10 @@ export async function fetchLog(id: number): Promise<McapLog> {
 }
 
 /** Fetch GeoJSON for a log */
-export async function fetchGeoJson(id: number): Promise<any> {
+export async function fetchGeoJson(id: number): Promise<GeoJsonFeatureCollection> {
     const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/geojson`);
     if (!res.ok) throw new Error(`Failed to fetch GeoJSON: ${res.statusText}`);
-    return normalizeLog(await res.json());
+    return await res.json();
 }
 
 /** PATCH or PUT a log */
@@ -105,8 +116,11 @@ export async function uploadFiles(files: File[]): Promise<number[]> {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail ?? err.message ?? `Upload failed: ${res.statusText}`);
     }
-    const payload = await res.json().catch(() => null);
-    return payload?.results?.map((r: any) => r?.id).filter((id: any) => typeof id === 'number') ?? [];
+    const payload = (await res.json().catch(() => null)) as { results?: Array<{ id?: number }> } | null;
+    if (!payload?.results) return [];
+    return payload.results
+        .map((result) => result.id)
+        .filter((id): id is number => typeof id === 'number');
 }
 
 /** Download MCAP file for a single log */
@@ -131,11 +145,16 @@ export async function downloadLog(id: number): Promise<void> {
 }
 
 /** Bulk download logs as a ZIP */
-export async function bulkDownload(ids: number[], format: DownloadFormat): Promise<void> {
+export async function bulkDownload(ids: number[], format: DownloadFormat, resampleHz?: number): Promise<void> {
+    const payload: { ids: number[]; format: DownloadFormat; resample_hz?: number } = { ids, format };
+    if (format !== 'mcap' && typeof resampleHz === 'number') {
+        payload.resample_hz = resampleHz;
+    }
+
     const res = await fetch(`${API_BASE_URL}/mcap-logs/download/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids, format }),
+        body: JSON.stringify(payload),
     });
     if (!res.ok) {
         let message = `Failed to download: ${res.statusText}`;

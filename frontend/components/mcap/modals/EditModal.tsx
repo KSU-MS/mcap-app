@@ -175,6 +175,7 @@ function ComboboxChipInput({ label, selected, options, onAdd, onRemove }: Combob
                         <button
                             type="button"
                             role="option"
+                            aria-selected={false}
                             className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:opacity-80"
                             style={{ background: 'rgba(195,136,34,0.08)', color: 'var(--ochre-dark)', fontWeight: 600 }}
                             onMouseDown={(e) => { e.preventDefault(); handleAdd(query); setOpen(false); }}
@@ -235,24 +236,27 @@ interface Props {
     onSave: (form: EditForm) => void;
 }
 
-export function EditModal({ log, open, saving, lookups, onClose, onSave }: Props) {
-    const [form, setForm] = useState<EditForm>({
-        cars: [], drivers: [], event_types: [], locations: [], notes: '', tags: [],
-    });
+function createInitialForm(log: McapLog): EditForm {
+    return {
+        cars: normalizeList(log.cars),
+        drivers: normalizeList(log.drivers),
+        event_types: normalizeList(log.event_types),
+        locations: normalizeList(log.locations),
+        notes: log.notes ?? '',
+        tags: normalizeList(log.tags),
+    };
+}
 
-    // Sync form when log/open changes
-    useEffect(() => {
-        if (log && open) {
-            setForm({
-                cars: normalizeList(log.cars),
-                drivers: normalizeList(log.drivers),
-                event_types: normalizeList(log.event_types),
-                locations: normalizeList(log.locations),
-                notes: log.notes ?? '',
-                tags: normalizeList(log.tags),
-            });
-        }
-    }, [log, open]);
+interface EditModalContentProps {
+    log: McapLog;
+    saving: boolean;
+    lookups: Props['lookups'];
+    onClose: () => void;
+    onSave: (form: EditForm) => void;
+}
+
+function EditModalContent({ log, saving, lookups, onClose, onSave }: EditModalContentProps) {
+    const [form, setForm] = useState<EditForm>(() => createInitialForm(log));
 
     const addItem = (key: keyof Omit<EditForm, 'notes'>, value: string) => {
         const v = value.trim();
@@ -277,62 +281,75 @@ export function EditModal({ log, open, saving, lookups, onClose, onSave }: Props
         ];
 
     return (
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+                <DialogTitle className="font-serif text-lg" style={{ color: 'var(--charcoal)' }}>
+                    Edit Log — ID {log.id}
+                </DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-5 mt-1">
+                {fields.map(({ key, label, options }) => (
+                    <div key={key}>
+                        <Label
+                            htmlFor={label.toLowerCase().replace(/\s+/g, '-')}
+                            className="text-[10px] font-semibold uppercase tracking-wide mb-1.5 block"
+                            style={{ color: 'var(--sienna)' }}
+                        >
+                            {label}
+                        </Label>
+                        <ComboboxChipInput
+                            label={label}
+                            selected={form[key]}
+                            options={options}
+                            onAdd={(v) => addItem(key, v)}
+                            onRemove={(v) => removeItem(key, v)}
+                        />
+                    </div>
+                ))}
+
+                <div>
+                    <Label
+                        htmlFor="edit-notes"
+                        className="text-[10px] font-semibold uppercase tracking-wide mb-1.5 block"
+                        style={{ color: 'var(--sienna)' }}
+                    >
+                        Notes
+                    </Label>
+                    <Textarea
+                        id="edit-notes"
+                        value={form.notes}
+                        onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                        rows={4}
+                        style={{ background: 'var(--off-white)' }}
+                    />
+                </div>
+            </div>
+
+            <DialogFooter className="gap-2 mt-4">
+                <button className="skeuo-btn-ghost" onClick={onClose} disabled={saving}>
+                    Cancel
+                </button>
+                <button className="skeuo-btn-primary" onClick={() => onSave(form)} disabled={saving}>
+                    {saving ? 'Saving…' : 'Save'}
+                </button>
+            </DialogFooter>
+        </DialogContent>
+    );
+}
+
+export function EditModal({ log, open, saving, lookups, onClose, onSave }: Props) {
+    return (
         <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
             {log && (
-                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                    <DialogHeader>
-                        <DialogTitle className="font-serif text-lg" style={{ color: 'var(--charcoal)' }}>
-                            Edit Log — ID {log.id}
-                        </DialogTitle>
-                    </DialogHeader>
-
-                    <div className="space-y-5 mt-1">
-                        {fields.map(({ key, label, options }) => (
-                            <div key={key}>
-                                <Label
-                                    htmlFor={label.toLowerCase().replace(/\s+/g, '-')}
-                                    className="text-[10px] font-semibold uppercase tracking-wide mb-1.5 block"
-                                    style={{ color: 'var(--sienna)' }}
-                                >
-                                    {label}
-                                </Label>
-                                <ComboboxChipInput
-                                    label={label}
-                                    selected={form[key]}
-                                    options={options}
-                                    onAdd={(v) => addItem(key, v)}
-                                    onRemove={(v) => removeItem(key, v)}
-                                />
-                            </div>
-                        ))}
-
-                        <div>
-                            <Label
-                                htmlFor="edit-notes"
-                                className="text-[10px] font-semibold uppercase tracking-wide mb-1.5 block"
-                                style={{ color: 'var(--sienna)' }}
-                            >
-                                Notes
-                            </Label>
-                            <Textarea
-                                id="edit-notes"
-                                value={form.notes}
-                                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                                rows={4}
-                                style={{ background: 'var(--off-white)' }}
-                            />
-                        </div>
-                    </div>
-
-                    <DialogFooter className="gap-2 mt-4">
-                        <button className="skeuo-btn-ghost" onClick={onClose} disabled={saving}>
-                            Cancel
-                        </button>
-                        <button className="skeuo-btn-primary" onClick={() => onSave(form)} disabled={saving}>
-                            {saving ? 'Saving…' : 'Save'}
-                        </button>
-                    </DialogFooter>
-                </DialogContent>
+                <EditModalContent
+                    key={log.id}
+                    log={log}
+                    saving={saving}
+                    lookups={lookups}
+                    onClose={onClose}
+                    onSave={onSave}
+                />
             )}
         </Dialog>
     );
