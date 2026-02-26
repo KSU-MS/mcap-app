@@ -12,9 +12,18 @@ unset PYTHONHOME || true
 SERVICE="${1:-both}"
 
 # Common environment variables
-export CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://localhost:6379/0}
-export CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://localhost:6379/0}
+export DJANGO_HOST=${DJANGO_HOST:-127.0.0.1}
+export DJANGO_PORT=${DJANGO_PORT:-8000}
+export REDIS_HOST=${REDIS_HOST:-localhost}
+export REDIS_PORT=${REDIS_PORT:-6379}
 export MEDIA_ROOT=${MEDIA_ROOT:-/Users/pettruskonnoth/Documents}
+
+if [[ -z "${CELERY_BROKER_URL:-}" ]]; then
+  export CELERY_BROKER_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+fi
+if [[ -z "${CELERY_RESULT_BACKEND:-}" ]]; then
+  export CELERY_RESULT_BACKEND="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+fi
 
 # Sync dependencies
 uv sync
@@ -30,9 +39,9 @@ run_backend() {
   echo "Starting Django backend..."
   cd "$ROOT_DIR/backend"
   if [[ "${RELOAD:-0}" == "1" ]]; then
-    uv run python manage.py runserver
+    uv run python manage.py runserver "$DJANGO_HOST:$DJANGO_PORT"
   else
-    uv run python manage.py runserver --noreload
+    uv run python manage.py runserver "$DJANGO_HOST:$DJANGO_PORT" --noreload
   fi
 }
 
@@ -76,8 +85,12 @@ case "$SERVICE" in
     echo "  both     - Run both in parallel (default)"
     echo ""
     echo "Environment variables:"
+    echo "  DJANGO_HOST         - Backend host (default: 127.0.0.1)"
+    echo "  DJANGO_PORT         - Backend port (default: 8000)"
+    echo "  REDIS_HOST          - Redis host (default: localhost)"
+    echo "  REDIS_PORT          - Redis port (default: 6379)"
     echo "  RELOAD=1           - Enable Django autoreload (default: disabled)"
-    echo "  CELERY_BROKER_URL  - Redis broker URL (default: redis://localhost:6379/0)"
+    echo "  CELERY_BROKER_URL  - Redis broker URL (default: redis://$REDIS_HOST:$REDIS_PORT/0)"
     echo "  MEDIA_ROOT         - Media files directory (default: /Users/pettruskonnoth/Documents)"
     exit 1
     ;;

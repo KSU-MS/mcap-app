@@ -4,16 +4,17 @@ services:
     platform: linux/amd64
     restart: always
     shm_size: 128mb
+    command: ["postgres", "-p", "${POSTGRES_CONTAINER_PORT:-5432}"]
     environment:
       POSTGRES_DB: mcap_query_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5433:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:${POSTGRES_CONTAINER_PORT:-5432}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -p ${POSTGRES_CONTAINER_PORT:-5432}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -21,12 +22,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
+    command: ["redis-server", "--port", "${REDIS_CONTAINER_PORT:-6379}"]
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:${REDIS_CONTAINER_PORT:-6379}"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "${REDIS_CONTAINER_PORT:-6379}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -51,14 +53,14 @@ services:
       - .:/app
       - media_data:/app/media
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:${REDIS_CONTAINER_PORT:-6379}/0
+      - CELERY_RESULT_BACKEND=redis://redis:${REDIS_CONTAINER_PORT:-6379}/0
       - DJANGO_SETTINGS_MODULE=backend.settings
       - POSTGRES_DB=mcap_query_db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_HOST=db
-      - POSTGRES_PORT=5432
+      - POSTGRES_PORT=${POSTGRES_CONTAINER_PORT:-5432}
       - MEDIA_ROOT=/app/media
       - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
     depends_on:
@@ -84,7 +86,7 @@ services:
         cd /app && uv sync &&
         cd /app/backend &&
         uv run python manage.py migrate &&
-        uv run python manage.py runserver 0.0.0.0:8000
+        uv run python manage.py runserver $${DJANGO_HOST:-0.0.0.0}:$${DJANGO_PORT:-8000}
       "
     volumes:
       - .:/app
@@ -95,11 +97,13 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_HOST=db
-      - POSTGRES_PORT=5432
+      - POSTGRES_PORT=${POSTGRES_CONTAINER_PORT:-5432}
+      - DJANGO_HOST=0.0.0.0
+      - DJANGO_PORT=${BACKEND_PORT:-8000}
       - MEDIA_ROOT=/app/media
       - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
     depends_on:
       db:
         condition: service_healthy
@@ -111,4 +115,3 @@ volumes:
   postgres_data:
   redis_data:
   media_data:
-

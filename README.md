@@ -9,14 +9,17 @@ A Django REST Framework backend for managing and parsing **Formula SAE telemetry
 ### Quick start
 - Backend (local): `./scripts/dev_backend_local.sh`
 - Celery worker (local, optional): `./scripts/dev_celery_local.sh`
-- Frontend: `cd frontend && pnpm install && pnpm run dev`
+- Frontend: `cd frontend && pnpm install && FRONTEND_PORT=${FRONTEND_PORT:-3000} pnpm run dev`
 
 ### Run commands (Nix)
 - Enter dev shell: `nix develop`
 - Start Postgres + Redis: `./scripts/start-nix-services.sh start`
-- Run backend API: `python backend/manage.py runserver`
+- Run backend API: `python backend/manage.py runserver ${DJANGO_HOST:-127.0.0.1}:${DJANGO_PORT:-8000}`
 - Run Celery on macOS (safe pool): `celery -A backend worker --loglevel=info --pool=threads --concurrency=4`
 - Run Celery on Linux (production): `celery -A backend worker --loglevel=info --pool=prefork --concurrency=8`
+
+Port defaults are env-driven. Copy `.env.example` to `.env` (for Docker Compose) and override any of:
+`POSTGRES_CONTAINER_PORT`, `POSTGRES_HOST_PORT`, `REDIS_CONTAINER_PORT`, `REDIS_HOST_PORT`, `BACKEND_PORT`, `DJANGO_HOST`, `DJANGO_PORT`, `FRONTEND_PORT`, `REDIS_HOST`, `REDIS_PORT`.
 
 The service automates:
 - Getting MCAP log files from the car’s onboard Pi

@@ -52,7 +52,7 @@ uv add flower
 celery -A backend flower
 ```
 
-Then visit http://localhost:5555
+Then visit `http://localhost:${FLOWER_PORT:-5555}` (or your configured Flower port)
 
 ## How It Works
 
@@ -79,8 +79,10 @@ Then visit http://localhost:5555
 
 You can override Redis connection:
 ```bash
-export CELERY_BROKER_URL=redis://localhost:6379/0
-export CELERY_RESULT_BACKEND=redis://localhost:6379/0
+export REDIS_HOST=${REDIS_HOST:-localhost}
+export REDIS_PORT=${REDIS_PORT:-6379}
+export CELERY_BROKER_URL=redis://$REDIS_HOST:$REDIS_PORT/0
+export CELERY_RESULT_BACKEND=redis://$REDIS_HOST:$REDIS_PORT/0
 ```
 
 ## Troubleshooting
@@ -98,4 +100,3 @@ export CELERY_RESULT_BACKEND=redis://localhost:6379/0
 ### High memory usage
 - Adjust `CELERY_WORKER_PREFETCH_MULTIPLIER` in settings.py
 - Limit concurrent workers: `celery -A backend worker --concurrency=2`
-

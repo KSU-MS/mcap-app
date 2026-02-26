@@ -37,11 +37,15 @@ jobs:
 
           cd /home/pettrus/mcap_query_backend
 
+          BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}"
+          BACKEND_PORT="${BACKEND_PORT:-8000}"
+          FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+
           nix develop --command bash -lc "./scripts/start-nix-services.sh start"
 
           pkill -f "manage.py runserver" || true
-          nohup nix develop --command bash -lc "python backend/manage.py runserver 0.0.0.0:8000" >/tmp/backend.log 2>&1 &
+          nohup nix develop --command bash -lc "BACKEND_HOST=$BACKEND_HOST BACKEND_PORT=$BACKEND_PORT python backend/manage.py runserver $BACKEND_HOST:$BACKEND_PORT" >/tmp/backend.log 2>&1 &
 
           pkill -f "next start" || true
-          nohup nix develop --command bash -lc "cd frontend && pnpm install && pnpm build && pnpm start -p 3000" >/tmp/frontend.log 2>&1 &
+          nohup nix develop --command bash -lc "cd frontend && pnpm install && pnpm build && pnpm start -p $FRONTEND_PORT" >/tmp/frontend.log 2>&1 &
           EOF

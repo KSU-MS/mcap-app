@@ -2,11 +2,11 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-Set frontend API configuration (optional if backend is on port 8000):
+Set frontend API configuration (optional if backend is on `127.0.0.1:8000`):
 
 ```bash
 cp .env.example .env.local
-# then edit NEXT_PUBLIC_API_BASE_URL as needed
+# then edit NEXT_PUBLIC_API_BASE_URL (or NEXT_PUBLIC_API_HOST / NEXT_PUBLIC_API_PORT)
 ```
 
 First, run the development server:
@@ -16,12 +16,12 @@ npm run dev
 # or
 yarn dev
 # or
-pnpm dev
+FRONTEND_PORT=${FRONTEND_PORT:-3000} pnpm dev
 # or
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:${FRONTEND_PORT:-3000}` with your browser to see the result.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

@@ -87,9 +87,6 @@
         POSTGRES_USER = "postgres";
         POSTGRES_PASSWORD = "postgres";
         POSTGRES_HOST = "localhost";
-        POSTGRES_PORT = "5433";
-        CELERY_BROKER_URL = "redis://localhost:6379/0";
-        CELERY_RESULT_BACKEND = "redis://localhost:6379/0";
         UV_NO_SYNC = "1";
         UV_PYTHON = pythonSet.python.interpreter;
         UV_PYTHON_DOWNLOADS = "never";
@@ -106,9 +103,14 @@
           export POSTGRES_USER="postgres"
           export POSTGRES_PASSWORD="postgres"
           export POSTGRES_HOST="localhost"
-          export POSTGRES_PORT="5433"
-          export CELERY_BROKER_URL="redis://localhost:6379/0"
-          export CELERY_RESULT_BACKEND="redis://localhost:6379/0"
+          export POSTGRES_PORT="''${POSTGRES_PORT:-5433}"
+          export REDIS_HOST="''${REDIS_HOST:-localhost}"
+          export REDIS_PORT="''${REDIS_PORT:-6379}"
+          export DJANGO_HOST="''${DJANGO_HOST:-127.0.0.1}"
+          export DJANGO_PORT="''${DJANGO_PORT:-8000}"
+          export FRONTEND_PORT="''${FRONTEND_PORT:-3000}"
+          export CELERY_BROKER_URL="''${CELERY_BROKER_URL:-redis://$REDIS_HOST:$REDIS_PORT/0}"
+          export CELERY_RESULT_BACKEND="''${CELERY_RESULT_BACKEND:-redis://$REDIS_HOST:$REDIS_PORT/0}"
           export REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
           ${lib.optionalString stdenv.isDarwin ''
             export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:}$DYLD_LIBRARY_PATH"
@@ -117,9 +119,9 @@
           echo "  Python: $(python3 --version) | uv: $(uv --version)"
           echo "  Postgres 16+PostGIS and Redis from Nix (same as prod)"
           echo "  Start DB+Redis: ./scripts/start-nix-services.sh start"
-          echo "  Backend:  python backend/manage.py runserver"
+          echo "  Backend:  python backend/manage.py runserver $DJANGO_HOST:$DJANGO_PORT"
           echo "  Celery:   celery -A backend worker --loglevel=info"
-          echo "  Frontend: cd frontend && pnpm install && pnpm run dev"
+          echo "  Frontend: cd frontend && pnpm install && FRONTEND_PORT=$FRONTEND_PORT pnpm run dev"
         '';
       };
     });

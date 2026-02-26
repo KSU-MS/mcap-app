@@ -23,7 +23,7 @@ Inside the shell you get:
 - **Node.js 22** for the frontend
 
 Python dependencies are still managed by **uv**: run `uv sync` in the repo root or in `backend/`.  
-The shell also sets `POSTGRES_*` and `CELERY_*` env vars to match `backend/backend/settings.py`.
+The shell sets `POSTGRES_*` and `CELERY_*` env vars with overridable defaults.
 
 ## Running Postgres and Redis from Nix (recommended)
 
@@ -36,9 +36,9 @@ From the repo root, **inside** `nix develop`:
 This will:
 
 - Create a data directory `.nix-data/` (ignored by git) if needed
-- Initialize Postgres on first run, then start it on **port 5433**
+- Initialize Postgres on first run, then start it on **`POSTGRES_PORT`** (default `5433`)
 - Create the database `mcap_query_db` if it doesn’t exist
-- Start Redis on **port 6379**
+- Start Redis on **`REDIS_PORT`** (default `6379`)
 
 Then:
 
@@ -60,7 +60,7 @@ Then:
    ```bash
    uv sync
    uv run python backend/manage.py migrate
-   uv run python backend/manage.py runserver
+   uv run python backend/manage.py runserver ${DJANGO_HOST:-127.0.0.1}:${DJANGO_PORT:-8000}
    ```
 
 3. **In another terminal** (Celery):
@@ -73,10 +73,17 @@ Then:
 4. **Frontend** (optional):
 
    ```bash
-   cd frontend && pnpm install && pnpm run dev
+   cd frontend && pnpm install && FRONTEND_PORT=${FRONTEND_PORT:-3000} pnpm run dev
    ```
 
 You can still use **Docker** for Postgres/Redis if you prefer: `docker compose up -d db redis`. The app env (Python, GDAL, etc.) is the same either way.
+
+### Port environment variables
+
+- `POSTGRES_PORT` (Nix local Postgres, default `5433`)
+- `REDIS_PORT` (Nix local Redis, default `6379`)
+- `DJANGO_HOST` / `DJANGO_PORT` (backend bind host/port, defaults `127.0.0.1` / `8000`)
+- `FRONTEND_PORT` (Next.js dev/start port, default `3000`)
 
 ### Migrating data from Docker Postgres to Nix Postgres
 

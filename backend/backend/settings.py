@@ -168,10 +168,17 @@ MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "/Users/pettruskonnoth/Documents"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS settings
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+_cors_allowed_origins_env = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+if _cors_allowed_origins_env:
+    CORS_ALLOWED_ORIGINS = [
+        o.strip() for o in _cors_allowed_origins_env.split(",") if o.strip()
+    ]
+else:
+    frontend_port = os.environ.get("FRONTEND_PORT", "3000")
+    CORS_ALLOWED_ORIGINS = [
+        f"http://localhost:{frontend_port}",
+        f"http://127.0.0.1:{frontend_port}",
+    ]
 
 # Allow credentials (cookies, authorization headers, etc.)
 CORS_ALLOW_CREDENTIALS = True
