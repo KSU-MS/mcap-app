@@ -18,6 +18,7 @@ wheels/
 # Media files (uploaded files should not be in git)
 backend/media/
 media/
+data/media/
 *.mcap
 
 # Frontend (Next.js) artifacts
