@@ -115,11 +115,13 @@ services:
   frontend:
     image: node:22-bullseye
     working_dir: /app
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-/api}
     command: >
       sh -lc "
         corepack enable &&
         pnpm install --frozen-lockfile &&
-        NEXT_PUBLIC_API_BASE_URL=/api pnpm run build &&
+        pnpm run build &&
         FRONTEND_PORT=13000 pnpm run start
       "
     volumes:
