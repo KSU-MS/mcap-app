@@ -108,10 +108,10 @@
 
               export GDAL_LIBRARY_PATH="${gdalLib}"
               export GEOS_LIBRARY_PATH="${geosLib}"
-              export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:}$PYTHONPATH"
-              ${lib.optionalString stdenv.isDarwin ''
-                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:}$DYLD_LIBRARY_PATH"
-              ''}
+          export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
+          ${lib.optionalString stdenv.isDarwin ''
+            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          ''}
 
               exec gunicorn backend.wsgi:application \
                 --chdir "${backendCode}" \
@@ -137,10 +137,10 @@
 
               export GDAL_LIBRARY_PATH="${gdalLib}"
               export GEOS_LIBRARY_PATH="${geosLib}"
-              export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:}$PYTHONPATH"
-              ${lib.optionalString stdenv.isDarwin ''
-                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:}$DYLD_LIBRARY_PATH"
-              ''}
+          export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
+          ${lib.optionalString stdenv.isDarwin ''
+            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          ''}
 
               exec "${virtualenv}/bin/celery" -A backend worker \
                 --workdir "${backendCode}" \
@@ -160,10 +160,10 @@
               export DJANGO_SETTINGS_MODULE="''${DJANGO_SETTINGS_MODULE:-backend.settings}"
               export GDAL_LIBRARY_PATH="${gdalLib}"
               export GEOS_LIBRARY_PATH="${geosLib}"
-              export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:}$PYTHONPATH"
-              ${lib.optionalString stdenv.isDarwin ''
-                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:}$DYLD_LIBRARY_PATH"
-              ''}
+          export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
+          ${lib.optionalString stdenv.isDarwin ''
+            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          ''}
 
               exec "${virtualenv}/bin/python" "${backendCode}/manage.py" migrate --noinput
             '';
@@ -279,8 +279,8 @@
               export CELERY_BROKER_URL="''${CELERY_BROKER_URL:-redis://$REDIS_HOST:$REDIS_PORT/0}"
               export CELERY_RESULT_BACKEND="''${CELERY_RESULT_BACKEND:-redis://$REDIS_HOST:$REDIS_PORT/0}"
               ${lib.optionalString stdenv.isDarwin ''
-                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:}$DYLD_LIBRARY_PATH"
-              ''}
+            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          ''}
               echo "mcap-query-backend dev shell"
               echo "  Backend app: nix run .#backend"
               echo "  Celery app:  nix run .#celery"
