@@ -9,8 +9,8 @@ services:
       POSTGRES_DB: mcap_query_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    ports:
-      - "${POSTGRES_HOST_PORT:-5433}:${POSTGRES_CONTAINER_PORT:-5432}"
+    expose:
+      - "${POSTGRES_CONTAINER_PORT:-5432}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,8 +23,8 @@ services:
     image: redis:7-alpine
     restart: always
     command: ["redis-server", "--port", "${REDIS_CONTAINER_PORT:-6379}"]
-    ports:
-      - "${REDIS_HOST_PORT:-6379}:${REDIS_CONTAINER_PORT:-6379}"
+    expose:
+      - "${REDIS_CONTAINER_PORT:-6379}"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -100,12 +100,11 @@ services:
       - POSTGRES_PORT=${POSTGRES_CONTAINER_PORT:-5432}
       - DJANGO_HOST=0.0.0.0
       - DJANGO_PORT=18000
-      - BACKEND_PORT=18000
       - MEDIA_ROOT=/app/media
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1,0.0.0.0}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost}
-    ports:
-      - "${BACKEND_PORT:-18000}:18000"
+    expose:
+      - "18000"
     depends_on:
       db:
         condition: service_healthy
