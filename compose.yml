@@ -47,7 +47,7 @@ services:
         [ -n \"$$GEOS_LIB\" ] && export GEOS_LIBRARY_PATH=$$GEOS_LIB &&
         pip install --no-cache-dir uv &&
         cd /app && uv sync &&
-        cd /app/backend && uv run celery -A backend worker --loglevel=info
+        cd /app/backend && uv run celery -A backend worker --loglevel=info -E
       "
     volumes:
       - .:/app
