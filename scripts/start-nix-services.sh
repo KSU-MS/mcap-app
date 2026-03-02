@@ -3,10 +3,16 @@
 # Data lives under .nix-data/ by default (set NIX_DATA_DIR to override).
 set -euo pipefail
 
+# Avoid invalid global locale overrides breaking redis-server startup.
+unset LC_ALL || true
+export LANG="${LANG:-C.UTF-8}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NIX_DATA_DIR="${NIX_DATA_DIR:-$ROOT/.nix-data}"
 PGDATA="$NIX_DATA_DIR/postgres"
 REDIS_DIR="$NIX_DATA_DIR/redis"
+REDIS_PIDFILE="$REDIS_DIR/redis.pid"
+REDIS_LOGFILE="$REDIS_DIR/redis.log"
 POSTGRES_PORT="${POSTGRES_PORT:-5433}"
 POSTGRES_SOCKET_DIR="${POSTGRES_SOCKET_DIR:-/tmp}"
 REDIS_PORT="${REDIS_PORT:-6379}"
@@ -39,7 +45,18 @@ case "${1:-start}" in
     # Redis: start if not already listening
     if ! redis-cli -p "$REDIS_PORT" ping >/dev/null 2>&1; then
       echo "Starting Redis on port $REDIS_PORT ..."
-      redis-server --port "$REDIS_PORT" --dir "$REDIS_DIR" --daemonize yes
+      redis-server \
+        --port "$REDIS_PORT" \
+        --bind 127.0.0.1 \
+        --dir "$REDIS_DIR" \
+        --pidfile "$REDIS_PIDFILE" \
+        --logfile "$REDIS_LOGFILE" \
+        --daemonize yes
+      sleep 1
+      if ! redis-cli -h 127.0.0.1 -p "$REDIS_PORT" ping >/dev/null 2>&1; then
+        echo "Redis failed to start on port $REDIS_PORT. See $REDIS_LOGFILE" >&2
+        exit 1
+      fi
     else
       echo "Redis already running (port $REDIS_PORT)."
     fi
