@@ -200,11 +200,12 @@
                 export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
               ''}
 
-                  exec "${virtualenv}/bin/celery" -A backend worker \
-                    --workdir "${backendCode}" \
-                    --loglevel "$CELERY_LOG_LEVEL" \
-                    --pool "$CELERY_POOL" \
-                    --concurrency "$CELERY_CONCURRENCY"
+              exec "${virtualenv}/bin/celery" \
+                --workdir "${backendCode}" \
+                -A backend worker \
+                --loglevel "$CELERY_LOG_LEVEL" \
+                --pool "$CELERY_POOL" \
+                --concurrency "$CELERY_CONCURRENCY"
             '';
           };
 
@@ -841,7 +842,7 @@
                 environment = {
                   FRONTEND_HOST = cfg.frontend.host;
                   FRONTEND_PORT = toString cfg.frontend.port;
-                  NEXT_PUBLIC_API_BASE_URL = "http://${cfg.host}:${toString cfg.port}";
+                  NEXT_PUBLIC_API_BASE_URL = "/api";
                 }
                 // cfg.extraEnvironment
                 // cfg.frontend.extraEnvironment;
@@ -887,7 +888,7 @@
                 forceSSL = cfg.nginx.forceSSL;
                 enableACME = cfg.nginx.enableACME;
                 locations."/api/" = {
-                  proxyPass = "http://${cfg.host}:${toString cfg.port}";
+                  proxyPass = "http://${cfg.host}:${toString cfg.port}/";
                   proxyWebsockets = true;
                 };
                 locations."/" = {

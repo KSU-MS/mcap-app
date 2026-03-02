@@ -7,12 +7,10 @@ import type {
 } from './types';
 
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
-const configuredApiHost = process.env.NEXT_PUBLIC_API_HOST?.trim() || '127.0.0.1';
-const configuredApiPort = process.env.NEXT_PUBLIC_API_PORT?.trim() || '8000';
 
 export const API_BASE_URL = (configuredApiBaseUrl && configuredApiBaseUrl.length > 0
     ? configuredApiBaseUrl
-    : `http://${configuredApiHost}:${configuredApiPort}`
+    : '/api'
 ).replace(/\/+$/, '');
 
 function withApiBase(path?: string): string | undefined {
