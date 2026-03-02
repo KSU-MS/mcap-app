@@ -87,7 +87,65 @@
             else "";
 
           backendCode = "${self}/backend";
+          frontendCode = "${self}/frontend";
           pythonSitePackages = "${virtualenv}/${python.sitePackages}";
+
+          frontendVersion = "0.1.0";
+          frontendDeps = pkgs.pnpm.fetchDeps {
+            pname = "mcap-frontend-deps";
+            version = frontendVersion;
+            src = frontendCode;
+            hash = "sha256-oMw8UBlkQWdQFjkLCMi/AA2uddm70fbUA4IKqR1CEoA=";
+          };
+
+          frontendPackage = pkgs.stdenv.mkDerivation {
+            pname = "mcap-frontend";
+            version = frontendVersion;
+            src = frontendCode;
+            nativeBuildInputs = [
+              pkgs.nodejs_22
+              pkgs.pnpm.configHook
+            ];
+            pnpmDeps = frontendDeps;
+
+            buildPhase = ''
+              runHook preBuild
+              export HOME="$TMPDIR"
+              export NEXT_TELEMETRY_DISABLED=1
+              pnpm run build
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/frontend"
+              cp -r .next "$out/frontend/.next"
+              cp -r public "$out/frontend/public"
+              cp -r node_modules "$out/frontend/node_modules"
+              cp package.json "$out/frontend/package.json"
+              cp next.config.ts "$out/frontend/next.config.ts"
+              runHook postInstall
+            '';
+          };
+
+          frontendRunner = pkgs.writeShellApplication {
+            name = "mcap-frontend";
+            runtimeInputs = [ pkgs.nodejs_22 ];
+            text = ''
+              set -euo pipefail
+
+              export NEXT_TELEMETRY_DISABLED=1
+              export NODE_ENV="production"
+              export FRONTEND_HOST="''${FRONTEND_HOST:-127.0.0.1}"
+              export FRONTEND_PORT="''${FRONTEND_PORT:-13000}"
+
+              exec "${pkgs.nodejs_22}/bin/node" \
+                "${frontendPackage}/frontend/node_modules/next/dist/bin/next" start \
+                -H "$FRONTEND_HOST" \
+                -p "$FRONTEND_PORT" \
+                "${frontendPackage}/frontend"
+            '';
+          };
 
           backendRunner = pkgs.writeShellApplication {
             name = "mcap-backend";
@@ -96,30 +154,30 @@
               pkgsUnstable.python313Packages.gunicorn
             ];
             text = ''
-              set -euo pipefail
+                  set -euo pipefail
 
-              export PYTHONDONTWRITEBYTECODE=1
-              export DJANGO_SETTINGS_MODULE="''${DJANGO_SETTINGS_MODULE:-backend.settings}"
-              export DJANGO_HOST="''${DJANGO_HOST:-127.0.0.1}"
-              export DJANGO_PORT="''${DJANGO_PORT:-18000}"
-              export GUNICORN_WORKERS="''${GUNICORN_WORKERS:-3}"
-              export GUNICORN_TIMEOUT="''${GUNICORN_TIMEOUT:-90}"
-              export MEDIA_ROOT="''${MEDIA_ROOT:-/var/lib/mcap-query-backend/media}"
+                  export PYTHONDONTWRITEBYTECODE=1
+                  export DJANGO_SETTINGS_MODULE="''${DJANGO_SETTINGS_MODULE:-backend.settings}"
+                  export DJANGO_HOST="''${DJANGO_HOST:-127.0.0.1}"
+                  export DJANGO_PORT="''${DJANGO_PORT:-18000}"
+                  export GUNICORN_WORKERS="''${GUNICORN_WORKERS:-3}"
+                  export GUNICORN_TIMEOUT="''${GUNICORN_TIMEOUT:-90}"
+                  export MEDIA_ROOT="''${MEDIA_ROOT:-/var/lib/mcap-query-backend/media}"
 
-              export GDAL_LIBRARY_PATH="${gdalLib}"
-              export GEOS_LIBRARY_PATH="${geosLib}"
-          export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
-          ${lib.optionalString stdenv.isDarwin ''
-            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-          ''}
+                  export GDAL_LIBRARY_PATH="${gdalLib}"
+                  export GEOS_LIBRARY_PATH="${geosLib}"
+              export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
+              ${lib.optionalString stdenv.isDarwin ''
+                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+              ''}
 
-              exec gunicorn backend.wsgi:application \
-                --chdir "${backendCode}" \
-                --bind "$DJANGO_HOST:$DJANGO_PORT" \
-                --workers "$GUNICORN_WORKERS" \
-                --timeout "$GUNICORN_TIMEOUT" \
-                --access-logfile - \
-                --error-logfile -
+                  exec gunicorn backend.wsgi:application \
+                    --chdir "${backendCode}" \
+                    --bind "$DJANGO_HOST:$DJANGO_PORT" \
+                    --workers "$GUNICORN_WORKERS" \
+                    --timeout "$GUNICORN_TIMEOUT" \
+                    --access-logfile - \
+                    --error-logfile -
             '';
           };
 
@@ -127,26 +185,26 @@
             name = "mcap-celery";
             runtimeInputs = [ virtualenv ];
             text = ''
-              set -euo pipefail
+                  set -euo pipefail
 
-              export PYTHONDONTWRITEBYTECODE=1
-              export DJANGO_SETTINGS_MODULE="''${DJANGO_SETTINGS_MODULE:-backend.settings}"
-              export CELERY_LOG_LEVEL="''${CELERY_LOG_LEVEL:-info}"
-              export CELERY_CONCURRENCY="''${CELERY_CONCURRENCY:-4}"
-              export CELERY_POOL="''${CELERY_POOL:-prefork}"
+                  export PYTHONDONTWRITEBYTECODE=1
+                  export DJANGO_SETTINGS_MODULE="''${DJANGO_SETTINGS_MODULE:-backend.settings}"
+                  export CELERY_LOG_LEVEL="''${CELERY_LOG_LEVEL:-info}"
+                  export CELERY_CONCURRENCY="''${CELERY_CONCURRENCY:-4}"
+                  export CELERY_POOL="''${CELERY_POOL:-prefork}"
 
-              export GDAL_LIBRARY_PATH="${gdalLib}"
-              export GEOS_LIBRARY_PATH="${geosLib}"
-          export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
-          ${lib.optionalString stdenv.isDarwin ''
-            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-          ''}
+                  export GDAL_LIBRARY_PATH="${gdalLib}"
+                  export GEOS_LIBRARY_PATH="${geosLib}"
+              export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
+              ${lib.optionalString stdenv.isDarwin ''
+                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+              ''}
 
-              exec "${virtualenv}/bin/celery" -A backend worker \
-                --workdir "${backendCode}" \
-                --loglevel "$CELERY_LOG_LEVEL" \
-                --pool "$CELERY_POOL" \
-                --concurrency "$CELERY_CONCURRENCY"
+                  exec "${virtualenv}/bin/celery" -A backend worker \
+                    --workdir "${backendCode}" \
+                    --loglevel "$CELERY_LOG_LEVEL" \
+                    --pool "$CELERY_POOL" \
+                    --concurrency "$CELERY_CONCURRENCY"
             '';
           };
 
@@ -154,18 +212,18 @@
             name = "mcap-migrate";
             runtimeInputs = [ virtualenv ];
             text = ''
-              set -euo pipefail
+                  set -euo pipefail
 
-              export PYTHONDONTWRITEBYTECODE=1
-              export DJANGO_SETTINGS_MODULE="''${DJANGO_SETTINGS_MODULE:-backend.settings}"
-              export GDAL_LIBRARY_PATH="${gdalLib}"
-              export GEOS_LIBRARY_PATH="${geosLib}"
-          export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
-          ${lib.optionalString stdenv.isDarwin ''
-            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-          ''}
+                  export PYTHONDONTWRITEBYTECODE=1
+                  export DJANGO_SETTINGS_MODULE="''${DJANGO_SETTINGS_MODULE:-backend.settings}"
+                  export GDAL_LIBRARY_PATH="${gdalLib}"
+                  export GEOS_LIBRARY_PATH="${geosLib}"
+              export PYTHONPATH="${pythonSitePackages}:${backendCode}''${PYTHONPATH:+:$PYTHONPATH}"
+              ${lib.optionalString stdenv.isDarwin ''
+                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+              ''}
 
-              exec "${virtualenv}/bin/python" "${backendCode}/manage.py" migrate --noinput
+                  exec "${virtualenv}/bin/python" "${backendCode}/manage.py" migrate --noinput
             '';
           };
         in
@@ -175,6 +233,8 @@
             backend = backendRunner;
             celery = celeryRunner;
             migrate = migrateRunner;
+            frontend = frontendPackage;
+            frontend-runner = frontendRunner;
             ubuntu-systemd-unit = pkgs.writeText "mcap-query-backend.service" ''
               [Unit]
               Description=MCAP Query Backend (gunicorn)
@@ -187,6 +247,26 @@
               Group=mcap
               EnvironmentFile=/etc/mcap-query-backend.env
               ExecStart=${backendRunner}/bin/mcap-backend
+              Restart=always
+              RestartSec=3
+              NoNewPrivileges=true
+              PrivateTmp=true
+
+              [Install]
+              WantedBy=multi-user.target
+            '';
+            ubuntu-frontend-systemd-unit = pkgs.writeText "mcap-query-frontend.service" ''
+              [Unit]
+              Description=MCAP Frontend (Next.js)
+              Wants=network-online.target
+              After=network-online.target
+
+              [Service]
+              Type=simple
+              User=mcap
+              Group=mcap
+              EnvironmentFile=/etc/mcap-query-backend.env
+              ExecStart=${frontendRunner}/bin/mcap-frontend
               Restart=always
               RestartSec=3
               NoNewPrivileges=true
@@ -214,19 +294,26 @@
               type = "app";
               program = "${migrateRunner}/bin/mcap-migrate";
             };
+            frontend = {
+              type = "app";
+              program = "${frontendRunner}/bin/mcap-frontend";
+            };
           };
 
-          checks.backend-bytecode = pkgs.runCommand "backend-bytecode"
-            {
-              src = ./.;
-              nativeBuildInputs = [ virtualenv ];
-            } ''
-            cp -r "$src" ./src
-            chmod -R u+w ./src
-            cd ./src
-            ${virtualenv}/bin/python -m compileall -q backend
-            touch $out
-          '';
+          checks = {
+            backend-bytecode = pkgs.runCommand "backend-bytecode"
+              {
+                src = ./.;
+                nativeBuildInputs = [ virtualenv ];
+              } ''
+              cp -r "$src" ./src
+              chmod -R u+w ./src
+              cd ./src
+              ${virtualenv}/bin/python -m compileall -q backend
+              touch $out
+            '';
+            frontend-build = frontendPackage;
+          };
 
           devShells.default = pkgs.mkShell {
             name = "mcap-query-backend";
@@ -254,37 +341,38 @@
             UV_PYTHON_DOWNLOADS = "never";
 
             shellHook = ''
-              export PS1="(mcap-query-backend) \\W \$ "
-              unset PYTHONPATH
-              export REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+                  export PS1="(mcap-query-backend) \\W \$ "
+                  unset PYTHONPATH
+                  export REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-              if [[ -f "$REPO_ROOT/.env" ]]; then
-                set -a
-                source "$REPO_ROOT/.env"
-                set +a
-              fi
+                  if [[ -f "$REPO_ROOT/.env" ]]; then
+                    set -a
+                    source "$REPO_ROOT/.env"
+                    set +a
+                  fi
 
-              export GDAL_LIBRARY_PATH="${gdalLib}"
-              export GEOS_LIBRARY_PATH="${geosLib}"
-              export POSTGRES_DB="''${POSTGRES_DB:-mcap_query_db}"
-              export POSTGRES_USER="''${POSTGRES_USER:-postgres}"
-              export POSTGRES_PASSWORD="''${POSTGRES_PASSWORD:-postgres}"
-              export POSTGRES_HOST="''${POSTGRES_HOST:-localhost}"
-              export POSTGRES_PORT="''${POSTGRES_PORT:-5433}"
-              export REDIS_HOST="''${REDIS_HOST:-localhost}"
-              export REDIS_PORT="''${REDIS_PORT:-6379}"
-              export DJANGO_HOST="''${DJANGO_HOST:-127.0.0.1}"
-              export DJANGO_PORT="''${DJANGO_PORT:-8000}"
-              export FRONTEND_PORT="''${FRONTEND_PORT:-3000}"
-              export CELERY_BROKER_URL="''${CELERY_BROKER_URL:-redis://$REDIS_HOST:$REDIS_PORT/0}"
-              export CELERY_RESULT_BACKEND="''${CELERY_RESULT_BACKEND:-redis://$REDIS_HOST:$REDIS_PORT/0}"
-              ${lib.optionalString stdenv.isDarwin ''
-            export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-          ''}
-              echo "mcap-query-backend dev shell"
-              echo "  Backend app: nix run .#backend"
-              echo "  Celery app:  nix run .#celery"
-              echo "  Migrations:  nix run .#migrate"
+                  export GDAL_LIBRARY_PATH="${gdalLib}"
+                  export GEOS_LIBRARY_PATH="${geosLib}"
+                  export POSTGRES_DB="''${POSTGRES_DB:-mcap_query_db}"
+                  export POSTGRES_USER="''${POSTGRES_USER:-postgres}"
+                  export POSTGRES_PASSWORD="''${POSTGRES_PASSWORD:-postgres}"
+                  export POSTGRES_HOST="''${POSTGRES_HOST:-localhost}"
+                  export POSTGRES_PORT="''${POSTGRES_PORT:-5433}"
+                  export REDIS_HOST="''${REDIS_HOST:-localhost}"
+                  export REDIS_PORT="''${REDIS_PORT:-6379}"
+                  export DJANGO_HOST="''${DJANGO_HOST:-127.0.0.1}"
+                  export DJANGO_PORT="''${DJANGO_PORT:-8000}"
+                  export FRONTEND_PORT="''${FRONTEND_PORT:-3000}"
+                  export CELERY_BROKER_URL="''${CELERY_BROKER_URL:-redis://$REDIS_HOST:$REDIS_PORT/0}"
+                  export CELERY_RESULT_BACKEND="''${CELERY_RESULT_BACKEND:-redis://$REDIS_HOST:$REDIS_PORT/0}"
+                  ${lib.optionalString stdenv.isDarwin ''
+                export DYLD_LIBRARY_PATH="${darwinLibPath}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+              ''}
+                  echo "mcap-query-backend dev shell"
+                  echo "  Backend app: nix run .#backend"
+                  echo "  Celery app:  nix run .#celery"
+                  echo "  Migrations:  nix run .#migrate"
+                  echo "  Frontend:    nix run .#frontend"
             '';
           };
 
@@ -465,6 +553,50 @@
               };
             };
 
+            frontend = {
+              enable = mkOption {
+                type = types.bool;
+                default = true;
+                description = "Enable Next.js frontend service.";
+              };
+
+              package = mkOption {
+                type = types.package;
+                default = self.packages.${pkgs.system}.frontend-runner;
+                description = "Frontend runner package.";
+              };
+
+              host = mkOption {
+                type = types.str;
+                default = "127.0.0.1";
+                description = "Frontend bind host.";
+              };
+
+              port = mkOption {
+                type = types.port;
+                default = 13000;
+                description = "Frontend bind port.";
+              };
+
+              openFirewall = mkOption {
+                type = types.bool;
+                default = false;
+                description = "Open frontend port in firewall.";
+              };
+
+              environmentFile = mkOption {
+                type = types.nullOr types.path;
+                default = null;
+                description = "Optional environment file for frontend overrides.";
+              };
+
+              extraEnvironment = mkOption {
+                type = types.attrsOf types.str;
+                default = { };
+                description = "Additional frontend environment variables.";
+              };
+            };
+
             nginx = {
               enable = mkOption {
                 type = types.bool;
@@ -506,6 +638,18 @@
                 {
                   assertion = cfg.redis.port != cfg.database.port;
                   message = "services.mcap-query-backend.redis.port must differ from database.port";
+                }
+                {
+                  assertion = (!cfg.frontend.enable) || (cfg.frontend.port != cfg.port);
+                  message = "services.mcap-query-backend.frontend.port must differ from backend port";
+                }
+                {
+                  assertion = (!cfg.frontend.enable) || (cfg.frontend.port != cfg.redis.port);
+                  message = "services.mcap-query-backend.frontend.port must differ from redis port";
+                }
+                {
+                  assertion = (!cfg.frontend.enable) || (cfg.frontend.port != cfg.database.port);
+                  message = "services.mcap-query-backend.frontend.port must differ from database port";
                 }
               ];
 
@@ -657,7 +801,55 @@
                 } // cfg.extraEnvironment;
               };
 
-              networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
+              systemd.services.mcap-query-frontend = lib.mkIf cfg.frontend.enable {
+                description = "MCAP query frontend";
+                wantedBy = [ "multi-user.target" ];
+                after = [ "network-online.target" "mcap-query-backend.service" ];
+                wants = [ "network-online.target" ];
+                requires = [ "mcap-query-backend.service" ];
+                serviceConfig = {
+                  Type = "simple";
+                  User = cfg.user;
+                  Group = cfg.group;
+                  WorkingDirectory = "${self}";
+                  EnvironmentFile =
+                    let
+                      frontendEnvFile =
+                        if cfg.frontend.environmentFile != null
+                        then cfg.frontend.environmentFile
+                        else cfg.environmentFile;
+                    in
+                    lib.optional (frontendEnvFile != null) frontendEnvFile;
+                  ExecStart = "${cfg.frontend.package}/bin/mcap-frontend";
+                  Restart = "always";
+                  RestartSec = "3s";
+                  NoNewPrivileges = true;
+                  PrivateTmp = true;
+                  PrivateDevices = true;
+                  ProtectSystem = "strict";
+                  ProtectHome = true;
+                  ProtectKernelTunables = true;
+                  ProtectKernelModules = true;
+                  ProtectControlGroups = true;
+                  RestrictSUIDSGID = true;
+                  LockPersonality = true;
+                  MemoryDenyWriteExecute = true;
+                  CapabilityBoundingSet = "";
+                  RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+                  ReadWritePaths = [ cfg.mediaRoot ];
+                };
+                environment = {
+                  FRONTEND_HOST = cfg.frontend.host;
+                  FRONTEND_PORT = toString cfg.frontend.port;
+                  NEXT_PUBLIC_API_BASE_URL = "http://${cfg.host}:${toString cfg.port}";
+                }
+                // cfg.extraEnvironment
+                // cfg.frontend.extraEnvironment;
+              };
+
+              networking.firewall.allowedTCPPorts =
+                lib.optionals cfg.openFirewall [ cfg.port ]
+                ++ lib.optionals cfg.frontend.openFirewall [ cfg.frontend.port ];
             }
 
             (lib.mkIf cfg.database.enable {
@@ -694,8 +886,15 @@
               services.nginx.virtualHosts.${cfg.nginx.serverName} = {
                 forceSSL = cfg.nginx.forceSSL;
                 enableACME = cfg.nginx.enableACME;
-                locations."/" = {
+                locations."/api/" = {
                   proxyPass = "http://${cfg.host}:${toString cfg.port}";
+                  proxyWebsockets = true;
+                };
+                locations."/" = {
+                  proxyPass =
+                    if cfg.frontend.enable
+                    then "http://${cfg.frontend.host}:${toString cfg.frontend.port}"
+                    else "http://${cfg.host}:${toString cfg.port}";
                   proxyWebsockets = true;
                 };
               };
