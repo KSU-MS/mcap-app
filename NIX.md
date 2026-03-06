@@ -117,3 +117,25 @@ The same flake works on `x86_64-linux`. On a NixOS server you’d typically:
 
 - Use this flake (or a NixOS module that wraps it) to define the app environment.
 - Enable `services.postgresql` (with PostGIS) and `services.redis`, and run Django + Celery as systemd services — same versions, no Docker.
+
+## Nix-built Docker images (no Dockerfile)
+
+This repo also exposes Docker image artifacts built directly from flake outputs for app services:
+
+- `docker-backend` (`mcap-backend:nix`)
+- `docker-celery` (`mcap-celery:nix`)
+- `docker-migrate` (`mcap-migrate:nix`)
+- `docker-frontend` (`mcap-frontend:nix`)
+
+Use a Linux builder/runner for these image builds (container payloads must be Linux).
+
+```bash
+nix build .#packages.x86_64-linux.docker-backend \
+  .#packages.x86_64-linux.docker-celery \
+  .#packages.x86_64-linux.docker-migrate \
+  .#packages.x86_64-linux.docker-frontend
+nix run .#packages.x86_64-linux.docker-load-images
+docker compose -f compose.nix.yml up -d
+```
+
+`compose.nix.yml` keeps all service-to-service traffic on Docker internal networking and only exposes nginx on `${NGINX_HOST_PORT:-13000}`.

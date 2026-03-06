@@ -58,6 +58,7 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@db:${POSTGRES_CONTAINER_PORT:-5432}/mcap_query_db}
       - CELERY_BROKER_URL=redis://redis:${REDIS_CONTAINER_PORT:-6379}/0
       - CELERY_RESULT_BACKEND=redis://redis:${REDIS_CONTAINER_PORT:-6379}/0
+      - UV_PROJECT_ENVIRONMENT=/tmp/.venv
       - DJANGO_SETTINGS_MODULE=backend.settings
       - MCAP_LOGS_DIR=${MCAP_LOGS_DIR:-}
       - MCAP_LOGS_SUBDIR=${MCAP_LOGS_SUBDIR:-mcap_logs}
@@ -100,6 +101,7 @@ services:
       - DEBUG=${DEBUG:-True}
       - SECRET_KEY=${SECRET_KEY:-django-insecure-change-me}
       - DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@db:${POSTGRES_CONTAINER_PORT:-5432}/mcap_query_db}
+      - UV_PROJECT_ENVIRONMENT=/tmp/.venv
       - DJANGO_SETTINGS_MODULE=backend.settings
       - MCAP_LOGS_DIR=${MCAP_LOGS_DIR:-}
       - MCAP_LOGS_SUBDIR=${MCAP_LOGS_SUBDIR:-mcap_logs}

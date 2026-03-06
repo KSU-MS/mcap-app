@@ -32,6 +32,15 @@ A Django REST Framework backend for managing and parsing **Formula SAE telemetry
 - Enter dev shell: `nix develop`
 - Run optional reproducibility checks: `nix flake check`
 
+### Reproducible Docker stack from Nix (no Dockerfile)
+- Build app images with Nix on Linux (`x86_64-linux` or `aarch64-linux`):
+  - `nix build .#packages.x86_64-linux.docker-backend .#packages.x86_64-linux.docker-celery .#packages.x86_64-linux.docker-migrate .#packages.x86_64-linux.docker-frontend`
+- Load images into Docker on that Linux host:
+  - `nix run .#packages.x86_64-linux.docker-load-images`
+- Start full stack (internal networking, only nginx exposed):
+  - `docker compose -f compose.nix.yml up -d`
+- open `http://localhost:13000`
+
 Port defaults are env-driven. Copy `.env.example` to `.env` (for Docker Compose) and override any of:
 `DATABASE_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `POSTGRES_CONTAINER_PORT`, `POSTGRES_HOST_PORT`, `REDIS_CONTAINER_PORT`, `REDIS_HOST_PORT`, `NGINX_HOST_PORT`, `DJANGO_HOST`, `DJANGO_PORT`, `FRONTEND_PORT`.
 

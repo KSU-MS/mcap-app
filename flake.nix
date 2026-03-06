@@ -227,6 +227,83 @@
                   exec "${virtualenv}/bin/python" "${backendCode}/manage.py" migrate --noinput
             '';
           };
+
+          dockerBackendImage = pkgs.dockerTools.buildLayeredImage {
+            name = "mcap-backend";
+            tag = "nix";
+            contents = [ backendRunner ];
+            config = {
+              Cmd = [ "${backendRunner}/bin/mcap-backend" ];
+              ExposedPorts = {
+                "18000/tcp" = { };
+              };
+              Env = [
+                "DJANGO_SETTINGS_MODULE=backend.settings"
+                "DJANGO_HOST=0.0.0.0"
+                "DJANGO_PORT=18000"
+              ];
+            };
+          };
+
+          dockerCeleryImage = pkgs.dockerTools.buildLayeredImage {
+            name = "mcap-celery";
+            tag = "nix";
+            contents = [ celeryRunner ];
+            config = {
+              Cmd = [ "${celeryRunner}/bin/mcap-celery" ];
+              Env = [
+                "DJANGO_SETTINGS_MODULE=backend.settings"
+                "CELERY_LOG_LEVEL=info"
+                "CELERY_CONCURRENCY=4"
+                "CELERY_POOL=prefork"
+              ];
+            };
+          };
+
+          dockerMigrateImage = pkgs.dockerTools.buildLayeredImage {
+            name = "mcap-migrate";
+            tag = "nix";
+            contents = [ migrateRunner ];
+            config = {
+              Cmd = [ "${migrateRunner}/bin/mcap-migrate" ];
+              Env = [
+                "DJANGO_SETTINGS_MODULE=backend.settings"
+              ];
+            };
+          };
+
+          dockerFrontendImage = pkgs.dockerTools.buildLayeredImage {
+            name = "mcap-frontend";
+            tag = "nix";
+            contents = [ frontendRunner ];
+            config = {
+              Cmd = [ "${frontendRunner}/bin/mcap-frontend" ];
+              ExposedPorts = {
+                "13000/tcp" = { };
+              };
+              Env = [
+                "NODE_ENV=production"
+                "FRONTEND_HOST=0.0.0.0"
+                "FRONTEND_PORT=13000"
+                "NEXT_PUBLIC_API_BASE_URL=/api"
+              ];
+            };
+          };
+
+          dockerLoadImagesRunner = pkgs.writeShellApplication {
+            name = "mcap-docker-load-images";
+            runtimeInputs = [ pkgs.docker ];
+            text = ''
+              set -euo pipefail
+
+              docker load < "${dockerBackendImage}"
+              docker load < "${dockerCeleryImage}"
+              docker load < "${dockerMigrateImage}"
+              docker load < "${dockerFrontendImage}"
+
+              echo "Loaded images: mcap-backend:nix, mcap-celery:nix, mcap-migrate:nix, mcap-frontend:nix"
+            '';
+          };
         in
         {
           packages = {
@@ -236,6 +313,13 @@
             migrate = migrateRunner;
             frontend = frontendPackage;
             frontend-runner = frontendRunner;
+          }
+          // lib.optionalAttrs stdenv.isLinux {
+            docker-backend = dockerBackendImage;
+            docker-celery = dockerCeleryImage;
+            docker-migrate = dockerMigrateImage;
+            docker-frontend = dockerFrontendImage;
+            docker-load-images = dockerLoadImagesRunner;
             ubuntu-systemd-unit = pkgs.writeText "mcap-query-backend.service" ''
               [Unit]
               Description=MCAP Query Backend (gunicorn)
