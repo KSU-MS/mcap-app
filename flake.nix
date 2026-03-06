@@ -152,6 +152,7 @@
             runtimeInputs = [
               virtualenv
               pkgsUnstable.python313Packages.gunicorn
+              pkgs.mcap-cli
             ];
             text = ''
                   set -euo pipefail
@@ -183,7 +184,10 @@
 
           celeryRunner = pkgs.writeShellApplication {
             name = "mcap-celery";
-            runtimeInputs = [ virtualenv ];
+            runtimeInputs = [
+              virtualenv
+              pkgs.mcap-cli
+            ];
             text = ''
                   set -euo pipefail
 
@@ -409,6 +413,7 @@
               pkgsUnstable.uv
               gdal
               geos
+              pkgs.mcap-cli
               postgresql
               pkgs.redis
               pkgs.nodejs_22
