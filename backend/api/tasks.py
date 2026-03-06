@@ -93,8 +93,8 @@ def recover_mcap_file(self, mcap_log_id, file_path):
                 "mcap command not found in PATH. Please install mcap CLI."
             )
 
-        # Create recovered directory inside mcap_logs folder
-        recovered_dir = Path(settings.MEDIA_ROOT) / "mcap_logs" / "recovered"
+        # Create recovered directory inside configured MCAP logs folder
+        recovered_dir = Path(settings.MCAP_LOGS_DIR) / "recovered"
         recovered_dir.mkdir(parents=True, exist_ok=True)
 
         # Create recovered file path with descriptive naming (original filename + recovery suffix)

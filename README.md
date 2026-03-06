@@ -6,20 +6,34 @@ A Django REST Framework backend for managing and parsing **Formula SAE telemetry
 - `backend/` — Django + Celery API (PostGIS/Redis)
 - `frontend/` — Next.js client (pnpm)
 
-### Quick start
-- Backend (local): `./scripts/dev_backend_local.sh`
-- Celery worker (local, optional): `./scripts/dev_celery_local.sh`
-- Frontend: `cd frontend && pnpm install && FRONTEND_PORT=${FRONTEND_PORT:-3000} pnpm run dev`
+### Quick start (uv + Docker infra, no Nix required)
+- Copy env file: `cp .env.example .env`
+- Start infrastructure: `docker compose -f compose.dev.yml up -d`
+- Sync backend deps: `uv sync`
+- Migrate DB: `uv run python backend/manage.py migrate`
+- Run backend API: `uv run python backend/manage.py runserver ${DJANGO_HOST:-127.0.0.1}:${DJANGO_PORT:-8000}`
+- Run Celery worker (separate terminal): `uv run celery -A backend worker --loglevel=info`
+- Run frontend: `cd frontend && pnpm install && FRONTEND_PORT=${FRONTEND_PORT:-3000} pnpm run dev`
 
-### Run commands (Nix)
+### Full stack with Docker Compose
+- `cp .env.example .env`
+- `docker compose -f compose.prod.yml up -d --build`
+- open `http://localhost:13000`
+
+### Makefile shortcuts
+- Local infra up/down:
+  - `make dev-up`
+  - `make dev-down`
+- Production stack up/down:
+  - `make prod-up`
+  - `make prod-down`
+
+### Optional Nix workflow
 - Enter dev shell: `nix develop`
-- Start Postgres + Redis: `./scripts/start-nix-services.sh start`
-- Run backend API: `python backend/manage.py runserver ${DJANGO_HOST:-127.0.0.1}:${DJANGO_PORT:-8000}`
-- Run Celery on macOS (safe pool): `celery -A backend worker --loglevel=info --pool=threads --concurrency=4`
-- Run Celery on Linux (production): `celery -A backend worker --loglevel=info --pool=prefork --concurrency=8`
+- Run optional reproducibility checks: `nix flake check`
 
 Port defaults are env-driven. Copy `.env.example` to `.env` (for Docker Compose) and override any of:
-`POSTGRES_CONTAINER_PORT`, `POSTGRES_HOST_PORT`, `REDIS_CONTAINER_PORT`, `REDIS_HOST_PORT`, `BACKEND_PORT`, `DJANGO_HOST`, `DJANGO_PORT`, `FRONTEND_PORT`, `REDIS_HOST`, `REDIS_PORT`.
+`DATABASE_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `POSTGRES_CONTAINER_PORT`, `POSTGRES_HOST_PORT`, `REDIS_CONTAINER_PORT`, `REDIS_HOST_PORT`, `NGINX_HOST_PORT`, `DJANGO_HOST`, `DJANGO_PORT`, `FRONTEND_PORT`.
 
 The service automates:
 - Getting MCAP log files from the car’s onboard Pi

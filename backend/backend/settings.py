@@ -12,9 +12,15 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+import environ
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+env = environ.Env()
+for env_path in (BASE_DIR / ".env", BASE_DIR.parent / ".env"):
+    if env_path.exists():
+        environ.Env.read_env(str(env_path))
 
 # GeoDjango library paths (for macOS with Homebrew)
 # Try to find GDAL library automatically, fallback to common paths
@@ -40,10 +46,13 @@ GEOS_LIBRARY_PATH = os.environ.get("GEOS_LIBRARY_PATH") or next(
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-p^(ga6^d1p2c#(&@hl5pz0#$7by@0n8jy9nka(md%o)qrg_80h"
+SECRET_KEY = env(
+    "SECRET_KEY",
+    default="django-insecure-p^(ga6^d1p2c#(&@hl5pz0#$7by@0n8jy9nka(md%o)qrg_80h",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env.bool("DEBUG", default=True)
 
 _allowed_hosts_env = os.environ.get("ALLOWED_HOSTS", "").strip()
 if _allowed_hosts_env:
@@ -109,17 +118,10 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
 # For local dev we map Postgres to localhost:5433; for Docker use service name "db" on 5432.
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5433")
+_database_url_default = f"postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": POSTGRES_DB,
-        "USER": POSTGRES_USER,
-        "PASSWORD": POSTGRES_PASSWORD,
-        "HOST": POSTGRES_HOST,
-        "PORT": POSTGRES_PORT,
-    }
-}
+DATABASES = {"default": env.db("DATABASE_URL", default=_database_url_default)}
+DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
 
 # Password validation
@@ -161,6 +163,26 @@ STATIC_URL = "static/"
 # Media files (User uploads)
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "/Users/pettruskonnoth/Documents"))
+_mcap_logs_dir_env = os.environ.get("MCAP_LOGS_DIR", "").strip()
+if _mcap_logs_dir_env:
+    _candidate_logs_dir = Path(_mcap_logs_dir_env)
+    MCAP_LOGS_DIR = (
+        _candidate_logs_dir
+        if _candidate_logs_dir.is_absolute()
+        else MEDIA_ROOT / _candidate_logs_dir
+    )
+else:
+    _mcap_logs_subdir = os.environ.get("MCAP_LOGS_SUBDIR", "mcap_logs").strip(" /")
+    if not _mcap_logs_subdir:
+        _mcap_logs_subdir = "mcap_logs"
+    MCAP_LOGS_DIR = MEDIA_ROOT / _mcap_logs_subdir
+
+try:
+    _relative_logs_dir = MCAP_LOGS_DIR.resolve().relative_to(MEDIA_ROOT.resolve())
+    MCAP_LOGS_URI_PREFIX = f"{MEDIA_URL.rstrip('/')}/{_relative_logs_dir.as_posix()}"
+except ValueError:
+    # If MCAP_LOGS_DIR is outside MEDIA_ROOT, keep a stable URI prefix.
+    MCAP_LOGS_URI_PREFIX = f"{MEDIA_URL.rstrip('/')}/mcap_logs"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -213,10 +235,8 @@ REST_FRAMEWORK = {
 }
 
 # Celery Configuration
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = os.environ.get(
-    "CELERY_RESULT_BACKEND", "redis://localhost:6379/0"
-)
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
 
 # Celery task settings
 CELERY_ACCEPT_CONTENT = ["json"]

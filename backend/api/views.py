@@ -198,7 +198,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
         if uploaded_file:
             # Create media directory if it doesn't exist
-            media_dir = settings.MEDIA_ROOT / "mcap_logs"
+            media_dir = settings.MCAP_LOGS_DIR
             media_dir.mkdir(parents=True, exist_ok=True)
 
             # Generate unique filename to avoid conflicts
@@ -220,7 +220,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
             # Store the URI in original_uri
             serializer.validated_data["original_uri"] = (
-                f"{settings.MEDIA_URL}mcap_logs/{file_name}"
+                f"{settings.MCAP_LOGS_URI_PREFIX}/{file_name}"
             )
             # Set file_name from uploaded file if not already provided
             if (
@@ -911,7 +911,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
             )
 
         results = []
-        media_dir = settings.MEDIA_ROOT / "mcap_logs"
+        media_dir = settings.MCAP_LOGS_DIR
         media_dir.mkdir(parents=True, exist_ok=True)
 
         for uploaded_file in uploaded_files:
@@ -934,7 +934,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 # Create database record
                 mcap_log = McapLog.objects.create(
                     file_name=uploaded_file.name,
-                    original_uri=f"{settings.MEDIA_URL}mcap_logs/{file_name}",
+                    original_uri=f"{settings.MCAP_LOGS_URI_PREFIX}/{file_name}",
                     file_size=file_size,
                     parse_status="pending",
                     recovery_status="pending",
