@@ -232,16 +232,62 @@
             '';
           };
 
+          imageDebugTools = [
+            pkgs.bashInteractive
+            pkgs.coreutils
+            pkgs.findutils
+            pkgs.gnugrep
+            pkgs.which
+          ];
+
+          backendImagePath = lib.makeBinPath (
+            imageDebugTools
+            ++ [
+              virtualenv
+              pkgsUnstable.python313Packages.gunicorn
+              pkgs.mcap-cli
+            ]
+          );
+
+          celeryImagePath = lib.makeBinPath (
+            imageDebugTools
+            ++ [
+              virtualenv
+              pkgs.mcap-cli
+            ]
+          );
+
+          migrateImagePath = lib.makeBinPath (
+            imageDebugTools
+            ++ [
+              virtualenv
+              pkgs.mcap-cli
+            ]
+          );
+
+          frontendImagePath = lib.makeBinPath (
+            imageDebugTools
+            ++ [
+              pkgs.nodejs_22
+            ]
+          );
+
           dockerBackendImage = pkgs.dockerTools.buildLayeredImage {
             name = "mcap-backend";
             tag = "nix";
-            contents = [ backendRunner ];
+            contents = imageDebugTools ++ [
+              backendRunner
+              virtualenv
+              pkgsUnstable.python313Packages.gunicorn
+              pkgs.mcap-cli
+            ];
             config = {
               Cmd = [ "${backendRunner}/bin/mcap-backend" ];
               ExposedPorts = {
                 "18000/tcp" = { };
               };
               Env = [
+                "PATH=${backendImagePath}"
                 "DJANGO_SETTINGS_MODULE=backend.settings"
                 "DJANGO_HOST=0.0.0.0"
                 "DJANGO_PORT=18000"
@@ -252,10 +298,15 @@
           dockerCeleryImage = pkgs.dockerTools.buildLayeredImage {
             name = "mcap-celery";
             tag = "nix";
-            contents = [ celeryRunner ];
+            contents = imageDebugTools ++ [
+              celeryRunner
+              virtualenv
+              pkgs.mcap-cli
+            ];
             config = {
               Cmd = [ "${celeryRunner}/bin/mcap-celery" ];
               Env = [
+                "PATH=${celeryImagePath}"
                 "DJANGO_SETTINGS_MODULE=backend.settings"
                 "CELERY_LOG_LEVEL=info"
                 "CELERY_CONCURRENCY=4"
@@ -267,10 +318,15 @@
           dockerMigrateImage = pkgs.dockerTools.buildLayeredImage {
             name = "mcap-migrate";
             tag = "nix";
-            contents = [ migrateRunner ];
+            contents = imageDebugTools ++ [
+              migrateRunner
+              virtualenv
+              pkgs.mcap-cli
+            ];
             config = {
               Cmd = [ "${migrateRunner}/bin/mcap-migrate" ];
               Env = [
+                "PATH=${migrateImagePath}"
                 "DJANGO_SETTINGS_MODULE=backend.settings"
               ];
             };
@@ -279,13 +335,17 @@
           dockerFrontendImage = pkgs.dockerTools.buildLayeredImage {
             name = "mcap-frontend";
             tag = "nix";
-            contents = [ frontendRunner ];
+            contents = imageDebugTools ++ [
+              frontendRunner
+              pkgs.nodejs_22
+            ];
             config = {
               Cmd = [ "${frontendRunner}/bin/mcap-frontend" ];
               ExposedPorts = {
                 "13000/tcp" = { };
               };
               Env = [
+                "PATH=${frontendImagePath}"
                 "NODE_ENV=production"
                 "FRONTEND_HOST=0.0.0.0"
                 "FRONTEND_PORT=13000"

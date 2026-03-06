@@ -3,10 +3,12 @@ Background tasks for MCAP log processing.
 """
 
 from celery import shared_task
+from celery.signals import worker_ready
 from django.contrib.gis.geos import LineString
 from django.utils import timezone
 from django.conf import settings
 from pathlib import Path
+import os
 import datetime
 import subprocess
 import shutil
@@ -52,6 +54,80 @@ def _resolve_source_file_for_log(
             return recovered_path
 
     return original_file_path or Path("")
+
+
+def _resolve_original_file_for_log(mcap_log: McapLog) -> Path:
+    original_uri = str(mcap_log.original_uri or "")
+    if not original_uri:
+        return Path("")
+
+    if original_uri.startswith(settings.MEDIA_URL):
+        rel = original_uri.replace(settings.MEDIA_URL, "", 1)
+        return Path(settings.MEDIA_ROOT) / rel
+    if original_uri.startswith("/"):
+        return Path(original_uri)
+    return Path(settings.MEDIA_ROOT) / original_uri
+
+
+def _task_path_value(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(settings.MEDIA_ROOT))
+    except Exception:
+        return str(path)
+
+
+def reenqueue_incomplete_mcap_logs() -> dict[str, int]:
+    """
+    Re-enqueue pending/processing recovery and parse jobs after worker restart.
+
+    This is intended for startup recovery when the app/worker was interrupted.
+    """
+    summary = {
+        "queued_recover": 0,
+        "queued_parse": 0,
+        "skipped_missing_recover_source": 0,
+        "skipped_missing_parse_source": 0,
+    }
+
+    recover_candidates = McapLog.objects.filter(
+        recovery_status__in=["pending", "processing"]
+    )
+    for mcap_log in recover_candidates:
+        original_source = _resolve_original_file_for_log(mcap_log)
+        if not original_source.exists():
+            summary["skipped_missing_recover_source"] += 1
+            continue
+
+        recover_mcap_file.delay(mcap_log.id, _task_path_value(original_source))
+        summary["queued_recover"] += 1
+
+    parse_candidates = McapLog.objects.filter(
+        recovery_status="completed", parse_status__in=["pending", "processing"]
+    )
+    for mcap_log in parse_candidates:
+        source_path = _resolve_source_file_for_log(mcap_log)
+        if not source_path.exists():
+            summary["skipped_missing_parse_source"] += 1
+            continue
+
+        parse_mcap_file.delay(mcap_log.id, _task_path_value(source_path))
+        summary["queued_parse"] += 1
+
+    print(f"[startup_reenqueue] {summary}")
+    return summary
+
+
+@worker_ready.connect
+def _on_celery_worker_ready(sender=None, **kwargs):
+    enabled = os.getenv("MCAP_REQUEUE_ON_CELERY_STARTUP", "1").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        print("[startup_reenqueue] skipped (MCAP_REQUEUE_ON_CELERY_STARTUP disabled)")
+        return
+
+    try:
+        reenqueue_incomplete_mcap_logs()
+    except Exception as exc:
+        print(f"[startup_reenqueue] failed: {exc}")
 
 
 @shared_task(bind=True, max_retries=3)

@@ -23,6 +23,11 @@ Guide for coding agents working in `mcap_query_backend`.
   - `cp .env.example .env`
   - local infra: `docker compose -f compose.dev.yml up -d`
   - full stack: `docker compose -f compose.prod.yml up -d --build`
+  - Nix-built full stack images + rollout:
+    - `nix build .#docker-backend .#docker-celery .#docker-migrate .#docker-frontend`
+    - `nix run .#docker-load-images`
+    - `docker compose -f compose.nix.yml up -d --force-recreate backend celery migrate`
+    - `docker compose -f compose.nix.yml logs -f celery`
   - open `http://localhost:13000`
 - Makefile shortcuts:
   - `make dev-up`, `make dev-down`
