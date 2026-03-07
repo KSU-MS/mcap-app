@@ -22,9 +22,9 @@ class McapToCsvConverter:
         resample_hz: float | None = None,
     ) -> str:
         """Convert an MCAP file to CSV/LD format."""
-        mcap_path = Path(mcap_path)
-        if not mcap_path.exists():
-            raise FileNotFoundError(f"MCAP file not found: {mcap_path}")
+        mcap_file_path = Path(mcap_path)
+        if not mcap_file_path.exists():
+            raise FileNotFoundError(f"MCAP file not found: {mcap_file_path}")
 
         if format not in ["omni", "tvn", "ld"]:
             raise ValueError(
@@ -36,53 +36,52 @@ class McapToCsvConverter:
         if resample_hz <= 0:
             raise ValueError("resample_hz must be greater than 0")
 
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_file_path = Path(output_path)
+        output_file_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            with open(mcap_path, "rb") as file_handle:
-                data, topics = self._parse_mcap(file_handle)
+            with open(mcap_file_path, "rb") as file_handle:
+                grouped_data, topics = self._parse_mcap(file_handle)
 
-                if format == "tvn":
-                    self._write_csv_tvn(output_path, data, topics, resample_hz)
-                elif format == "omni":
-                    self._write_csv_omni(output_path, data, topics, resample_hz)
-                elif format == "ld":
-                    self._write_ld(output_path, data, topics, resample_hz)
+            if format == "tvn":
+                self._write_csv_tvn(output_file_path, grouped_data, topics, resample_hz)
+            elif format == "omni":
+                self._write_csv_omni(
+                    output_file_path, grouped_data, topics, resample_hz
+                )
+            elif format == "ld":
+                self._write_ld(output_file_path, grouped_data, topics, resample_hz)
 
         except Exception as e:
-            raise Exception(
-                f"Error converting MCAP to {format.upper()}: {str(e)}"
-            ) from e
+            raise RuntimeError(f"Error converting MCAP to {format.upper()}: {e}") from e
 
-        return str(output_path)
+        return str(output_file_path)
 
-    def _parse_mcap(self, file_handle) -> Tuple[List[List[List[Any]]], List[str]]:
-        """Parse an MCAP file and return rows and unique topics."""
+    def _parse_mcap(self, file_handle) -> Tuple[Dict[int, Dict[str, Any]], List[str]]:
+        """Parse an MCAP file into timestamp groups and ordered topics."""
         reader = make_reader(file_handle, decoder_factories=[self.decoder_factory])
 
-        data: List[List[List[Any]]] = []
+        timestamp_groups: Dict[int, Dict[str, Any]] = {}
         topics: List[str] = []
+        seen_topics: set[str] = set()
 
         for _, _, message, proto_msg in reader.iter_decoded_messages():
-            field_names = [field.name for field in proto_msg.DESCRIPTOR.fields]
-            topic_data: List[List[Any]] = []
+            timestamp_ns = int(message.log_time)
+            row = timestamp_groups.setdefault(timestamp_ns, {})
 
-            for name in field_names:
-                if name not in topics:
+            for field in proto_msg.DESCRIPTOR.fields:
+                name = field.name
+                if name not in seen_topics:
+                    seen_topics.add(name)
                     topics.append(name)
 
                 try:
                     field_value = getattr(proto_msg, name)
-                    value_str = self._convert_value(field_value)
-                    topic_data.append([message.log_time, name, value_str])
-                except Exception as e:
-                    print(f"Warning: Could not process field {name}: {e}")
+                    row[name] = self._convert_value(field_value)
+                except Exception:
                     continue
 
-            data.append(topic_data)
-
-        return data, topics
+        return timestamp_groups, topics
 
     def _convert_value(self, value: Any) -> str:
         """Convert a Protobuf field value to a string representation."""
@@ -97,26 +96,6 @@ class McapToCsvConverter:
         if isinstance(value, list):
             return ",".join(str(self._convert_value(item)) for item in value)
         return str(value)
-
-    def _build_timestamp_groups(
-        self, data: List[List[List[Any]]]
-    ) -> Dict[int, Dict[str, Any]]:
-        """Group channel values by timestamp."""
-        timestamp_groups: Dict[int, Dict[str, Any]] = {}
-        for point in data:
-            if not point:
-                continue
-
-            timestamp = int(point[0][0])
-            if timestamp not in timestamp_groups:
-                timestamp_groups[timestamp] = {}
-
-            for row in point:
-                field_name = row[1]
-                field_value = row[2]
-                timestamp_groups[timestamp][field_name] = field_value
-
-        return timestamp_groups
 
     def _resample_timestamp_groups(
         self,
@@ -163,15 +142,14 @@ class McapToCsvConverter:
     def _write_csv_tvn(
         self,
         output_path: Path,
-        data: List[List[List[Any]]],
+        timestamp_groups: Dict[int, Dict[str, Any]],
         topics: List[str],
         resample_hz: float,
     ) -> None:
         """Write TVN CSV output from the fixed-rate common timebase."""
-        grouped = self._build_timestamp_groups(data)
-        resampled_rows = self._resample_timestamp_groups(grouped, resample_hz)
+        resampled_rows = self._resample_timestamp_groups(timestamp_groups, resample_hz)
 
-        with open(output_path, "w", newline="", encoding="utf-8", buffering=1) as file:
+        with open(output_path, "w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
             writer.writerow(["Time", "Name", "Value"])
 
@@ -180,47 +158,41 @@ class McapToCsvConverter:
                     if topic in topic_values:
                         writer.writerow([timestamp, topic, topic_values[topic]])
 
-            file.flush()
-
     def _write_csv_omni(
         self,
         output_path: Path,
-        data: List[List[List[Any]]],
+        timestamp_groups: Dict[int, Dict[str, Any]],
         topics: List[str],
         resample_hz: float,
     ) -> None:
         """Write OMNI CSV output with one column per channel."""
-        grouped = self._build_timestamp_groups(data)
-        resampled_rows = self._resample_timestamp_groups(grouped, resample_hz)
+        resampled_rows = self._resample_timestamp_groups(timestamp_groups, resample_hz)
 
-        with open(output_path, "w", newline="", encoding="utf-8", buffering=1) as file:
+        with open(output_path, "w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
             writer.writerow(["Time", *topics])
 
             for timestamp, topic_values in resampled_rows:
-                row = [timestamp]
+                row: List[Any] = [timestamp]
                 for topic in topics:
                     row.append(topic_values.get(topic))
                 writer.writerow(row)
 
-            file.flush()
-
     def _write_ld(
         self,
         output_path: Path,
-        data: List[List[List[Any]]],
+        timestamp_groups: Dict[int, Dict[str, Any]],
         topics: List[str],
         resample_hz: float,
     ) -> None:
         """Write LD output placeholder with fixed-rate metadata."""
-        grouped = self._build_timestamp_groups(data)
-        resampled_rows = self._resample_timestamp_groups(grouped, resample_hz)
+        resampled_rows = self._resample_timestamp_groups(timestamp_groups, resample_hz)
 
         with open(output_path, "w", encoding="utf-8") as file:
             file.write("# LD Format (placeholder)\n")
             file.write("# This format is not yet fully implemented\n")
             file.write(f"# Requested resample_hz: {resample_hz}\n")
-            file.write(f"# Source points: {len(data)}\n")
+            file.write(f"# Source points: {len(timestamp_groups)}\n")
             file.write(f"# Resampled points: {len(resampled_rows)}\n")
             file.write(f"# Topics: {len(topics)}\n")
             file.write(f"# Topics: {', '.join(topics)}\n")

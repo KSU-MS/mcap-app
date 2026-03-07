@@ -76,6 +76,11 @@ def _task_path_value(path: Path) -> str:
         return str(path)
 
 
+def _is_non_retryable_recover_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "invalid zero opcode" in message
+
+
 def reenqueue_incomplete_mcap_logs() -> dict[str, int]:
     """
     Re-enqueue pending/processing recovery and parse jobs after worker restart.
@@ -91,8 +96,8 @@ def reenqueue_incomplete_mcap_logs() -> dict[str, int]:
 
     recover_candidates = McapLog.objects.filter(
         recovery_status__in=["pending", "processing"]
-    )
-    for mcap_log in recover_candidates:
+    ).only("id", "original_uri")
+    for mcap_log in recover_candidates.iterator(chunk_size=200):
         original_source = _resolve_original_file_for_log(mcap_log)
         if not original_source.exists():
             summary["skipped_missing_recover_source"] += 1
@@ -103,8 +108,8 @@ def reenqueue_incomplete_mcap_logs() -> dict[str, int]:
 
     parse_candidates = McapLog.objects.filter(
         recovery_status="completed", parse_status__in=["pending", "processing"]
-    )
-    for mcap_log in parse_candidates:
+    ).only("id", "original_uri", "recovered_uri")
+    for mcap_log in parse_candidates.iterator(chunk_size=200):
         source_path = _resolve_source_file_for_log(mcap_log)
         if not source_path.exists():
             summary["skipped_missing_parse_source"] += 1
@@ -252,7 +257,10 @@ def recover_mcap_file(self, mcap_log_id, file_path):
             pass
 
         # Retry the task if it's a retryable error
-        if self.request.retries < self.max_retries:
+        if (
+            not _is_non_retryable_recover_error(e)
+            and self.request.retries < self.max_retries
+        ):
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
 
         return f"Error recovering MCAP file: {str(e)}"
@@ -589,31 +597,8 @@ def convert_mcap_to_csv(self, mcap_log_id, format="omni", resample_hz=None):
     try:
         mcap_log = McapLog.objects.get(id=mcap_log_id)
 
-        # Determine source file path
-        file_path = None
-
-        # Try recovered_uri first if available and not pending
-        if mcap_log.recovered_uri and mcap_log.recovered_uri != "pending":
-            if mcap_log.recovered_uri.startswith(settings.MEDIA_URL):
-                file_name = mcap_log.recovered_uri.replace(settings.MEDIA_URL, "", 1)
-                file_path = Path(settings.MEDIA_ROOT) / file_name
-            elif mcap_log.recovered_uri.startswith("/"):
-                file_path = Path(mcap_log.recovered_uri)
-            else:
-                file_path = Path(settings.MEDIA_ROOT) / mcap_log.recovered_uri
-
-        # Fall back to original_uri if recovered_uri not available
-        if not file_path or not file_path.exists():
-            if mcap_log.original_uri:
-                if mcap_log.original_uri.startswith(settings.MEDIA_URL):
-                    file_name = mcap_log.original_uri.replace(settings.MEDIA_URL, "", 1)
-                    file_path = Path(settings.MEDIA_ROOT) / file_name
-                elif mcap_log.original_uri.startswith("/"):
-                    file_path = Path(mcap_log.original_uri)
-                else:
-                    file_path = Path(settings.MEDIA_ROOT) / mcap_log.original_uri
-
-        if not file_path or not file_path.exists():
+        file_path = _resolve_source_file_for_log(mcap_log)
+        if not file_path.exists():
             raise FileNotFoundError(f"MCAP file not found for log {mcap_log_id}")
 
         file_path = file_path.resolve()
