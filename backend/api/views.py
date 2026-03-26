@@ -1,6 +1,6 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from .models import McapLog, ExportJob, ExportItem
+from .models import McapLog
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -8,18 +8,18 @@ from .serializers import (
     McapLogSerializer,
     ParseSummaryRequestSerializer,
     DownloadRequestSerializer,
-    ExportCreateRequestSerializer,
-    ExportJobSerializer,
 )
 from .parser import Parser
 from .gpsparse import GpsParser
-from .tasks import recover_mcap_file, enqueue_export_job
+from .tasks import recover_mcap_file
+from .views_export import ExportActionsMixin
 import os
+import hashlib
 import datetime
 import zipfile
 import tempfile
 from pathlib import Path
-from django.http import FileResponse, HttpResponse
+from django.http import HttpResponse
 from django.utils import timezone
 from django.contrib.gis.geos import LineString
 from django.conf import settings
@@ -27,7 +27,7 @@ from django.db.models import Q
 from celery.result import AsyncResult
 
 
-class McapLogViewSet(viewsets.ModelViewSet):
+class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
     queryset = McapLog.objects.all()
     serializer_class = McapLogSerializer
 
@@ -52,8 +52,10 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
         Returns: Filtered queryset ordered by creation date (newest first)
         """
-        # Start with all McapLog objects
+        # Start with all McapLog objects, scoped to current user when authenticated
         queryset = McapLog.objects.all()
+        if self.request.user.is_authenticated:
+            queryset = queryset.filter(Q(user=self.request.user) | Q(user__isnull=True))
 
         # ===== TEXT SEARCH =====
         # Search across log text + free-form metadata arrays (case-insensitive partial match)
@@ -174,6 +176,20 @@ class McapLogViewSet(viewsets.ModelViewSet):
         # Pagination is handled automatically by DRF after this method returns
         return queryset.order_by("-created_at")
 
+    def perform_create(self, serializer):
+        if self.request.user.is_authenticated:
+            serializer.save(user=self.request.user)
+        else:
+            serializer.save()
+
+    def _find_duplicate_log(self, request, content_sha256: str):
+        queryset = McapLog.objects.filter(content_sha256=content_sha256)
+        if request.user.is_authenticated:
+            queryset = queryset.filter(Q(user=request.user) | Q(user__isnull=True))
+        else:
+            queryset = queryset.filter(user__isnull=True)
+        return queryset.order_by("-created_at").first()
+
     def list(self, request, *args, **kwargs):
         """
         List MCAP logs with optional filtering.
@@ -195,6 +211,8 @@ class McapLogViewSet(viewsets.ModelViewSet):
         # Handle file upload
         uploaded_file = request.FILES.get("file")
         saved_file_relpath = None
+        content_sha256 = None
+        file_path = None
 
         if uploaded_file:
             # Create media directory if it doesn't exist
@@ -205,11 +223,25 @@ class McapLogViewSet(viewsets.ModelViewSet):
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_name = f"{timestamp}_{uploaded_file.name}"
             file_path = media_dir / file_name
+            hasher = hashlib.sha256()
 
             # Save the uploaded file
             with open(file_path, "wb+") as destination:
                 for chunk in uploaded_file.chunks():
                     destination.write(chunk)
+                    hasher.update(chunk)
+            content_sha256 = hasher.hexdigest()
+
+            duplicate = self._find_duplicate_log(request, content_sha256)
+            if duplicate is not None:
+                try:
+                    file_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                duplicate_data = self.get_serializer(duplicate).data
+                duplicate_data["deduplicated"] = True
+                duplicate_data["duplicate_of"] = duplicate.id
+                return Response(duplicate_data, status=status.HTTP_200_OK)
 
             # Store relative path so Celery workers (possibly in Docker) can resolve via MEDIA_ROOT
             saved_file_relpath = str(file_path.relative_to(settings.MEDIA_ROOT))
@@ -233,6 +265,7 @@ class McapLogViewSet(viewsets.ModelViewSet):
             serializer.validated_data["parse_status"] = "pending"
             serializer.validated_data["gps_status"] = "pending"
             serializer.validated_data["map_preview_status"] = "pending"
+            serializer.validated_data["content_sha256"] = content_sha256
         else:
             # If no file uploaded, ensure file_name is set if provided in request
             if (
@@ -422,97 +455,6 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
         # Handle MCAP download (original behavior)
         return self._download_as_mcap(mcap_logs)
-
-    @action(detail=False, methods=["post"], url_path="exports")
-    def create_export_job(self, request):
-        serializer = ExportCreateRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        ids = serializer.validated_data["ids"]
-        output_format = serializer.validated_data["format"]
-        resample_hz = serializer.validated_data.get(
-            "resample_hz", settings.MOTEC_RESAMPLE_HZ_DEFAULT
-        )
-
-        logs = list(McapLog.objects.filter(id__in=ids))
-        found_ids = {log.id for log in logs}
-        missing_ids = sorted(set(ids) - found_ids)
-        if missing_ids:
-            return Response(
-                {"error": f"Log IDs not found: {missing_ids}"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        job = ExportJob.objects.create(
-            format=output_format,
-            resample_hz=resample_hz,
-            status="pending",
-            requested_ids=ids,
-        )
-        ExportItem.objects.bulk_create(
-            [ExportItem(job=job, mcap_log=log, status="pending") for log in logs]
-        )
-        enqueue_export_job(job.id)
-
-        return Response(ExportJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
-
-    @action(
-        detail=False,
-        methods=["get"],
-        url_path=r"exports/(?P<job_id>[^/.]+)/status",
-    )
-    def export_status(self, request, job_id=None):
-        try:
-            job = ExportJob.objects.prefetch_related("items__mcap_log").get(id=job_id)
-        except ExportJob.DoesNotExist:
-            return Response(
-                {"error": f"Export job {job_id} not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        return Response(ExportJobSerializer(job).data, status=status.HTTP_200_OK)
-
-    @action(
-        detail=False,
-        methods=["get"],
-        url_path=r"exports/(?P<job_id>[^/.]+)/download",
-    )
-    def export_download(self, request, job_id=None):
-        try:
-            job = ExportJob.objects.get(id=job_id)
-        except ExportJob.DoesNotExist:
-            return Response(
-                {"error": f"Export job {job_id} not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if job.status not in ["completed", "completed_with_errors"] or not job.zip_uri:
-            return Response(
-                {
-                    "error": "Export job is not ready yet",
-                    "status": job.status,
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        if not str(job.zip_uri).startswith(settings.MEDIA_URL):
-            return Response(
-                {"error": "Invalid export path"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        rel_path = str(job.zip_uri).replace(settings.MEDIA_URL, "", 1)
-        zip_path = Path(settings.MEDIA_ROOT) / rel_path
-        if not zip_path.exists():
-            return Response(
-                {"error": "Export bundle not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        return FileResponse(
-            open(zip_path, "rb"),
-            as_attachment=True,
-            filename=f"export_job_{job.id}.zip",
-            content_type="application/zip",
-        )
 
     def _download_as_converted(self, mcap_logs, format, resample_hz=None):
         """
@@ -920,11 +862,27 @@ class McapLogViewSet(viewsets.ModelViewSet):
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 file_name = f"{timestamp}_{uploaded_file.name}"
                 file_path = media_dir / file_name
+                hasher = hashlib.sha256()
 
                 # Save the uploaded file
                 with open(file_path, "wb+") as destination:
                     for chunk in uploaded_file.chunks():
                         destination.write(chunk)
+                        hasher.update(chunk)
+
+                content_sha256 = hasher.hexdigest()
+
+                duplicate = self._find_duplicate_log(request, content_sha256)
+                if duplicate is not None:
+                    try:
+                        file_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    duplicate_data = self.get_serializer(duplicate).data
+                    duplicate_data["deduplicated"] = True
+                    duplicate_data["duplicate_of"] = duplicate.id
+                    results.append(duplicate_data)
+                    continue
 
                 saved_file_relpath = str(file_path.relative_to(settings.MEDIA_ROOT))
 
@@ -933,9 +891,11 @@ class McapLogViewSet(viewsets.ModelViewSet):
 
                 # Create database record
                 mcap_log = McapLog.objects.create(
+                    user=request.user if request.user.is_authenticated else None,
                     file_name=uploaded_file.name,
                     original_uri=f"{settings.MCAP_LOGS_URI_PREFIX}/{file_name}",
                     file_size=file_size,
+                    content_sha256=content_sha256,
                     parse_status="pending",
                     recovery_status="pending",
                     gps_status="pending",
@@ -1076,8 +1036,11 @@ class McapLogViewSet(viewsets.ModelViewSet):
         return Response(self._distinct_json_values("channels"))
 
     def _distinct_json_values(self, field_name):
+        queryset = McapLog.objects
+        if self.request.user.is_authenticated:
+            queryset = queryset.filter(Q(user=self.request.user) | Q(user__isnull=True))
         seen = set()
-        for values in McapLog.objects.exclude(**{field_name: []}).values_list(
+        for values in queryset.exclude(**{field_name: []}).values_list(
             field_name, flat=True
         ):
             if values:
