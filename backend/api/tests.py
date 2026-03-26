@@ -4,13 +4,13 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from .ld_writer import write_ld_file
-from .mcap_converter import McapToCsvConverter
+from .conversion.ld_writer import write_ld_file
+from .conversion.mcap_converter import McapToCsvConverter
 from .services.contracts import ConversionRequest, ExportProgressSnapshot
 from .services.conversion_service import McapConversionService
 from .services.status_constants import is_export_terminal, is_mcap_terminal
 from .serializers import DownloadRequestSerializer, ExportCreateRequestSerializer
-from .telemetry_log import DataLog
+from .conversion.telemetry_log import DataLog
 
 
 class DownloadRequestSerializerTests(SimpleTestCase):
@@ -273,11 +273,9 @@ class TaskSplitCompatibilityTests(SimpleTestCase):
             tasks_module.finalize_export_job.name, "api.tasks.finalize_export_job"
         )
 
-    def test_conversion_shims_point_to_new_modules(self):
+    def test_conversion_modules_import_from_new_package(self):
         from .conversion.mcap_converter import McapToCsvConverter as NewConverter
         from .conversion.telemetry_log import DataLog as NewDataLog
-        from .mcap_converter import McapToCsvConverter as ShimConverter
-        from .telemetry_log import DataLog as ShimDataLog
 
-        self.assertIs(ShimConverter, NewConverter)
-        self.assertIs(ShimDataLog, NewDataLog)
+        self.assertIsNotNone(NewConverter)
+        self.assertIsNotNone(NewDataLog)

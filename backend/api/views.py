@@ -461,7 +461,7 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         Convert MCAP files to CSV/LD and download as ZIP.
         Uses synchronous conversion (can be switched to async Celery if needed).
         """
-        from .mcap_converter import McapToCsvConverter
+        from .conversion.mcap_converter import McapToCsvConverter
         from django.conf import settings
         import datetime
 

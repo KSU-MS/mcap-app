@@ -6,6 +6,15 @@ A Django REST Framework backend for managing and parsing **Formula SAE telemetry
 - `backend/` — Django + Celery API (PostGIS/Redis)
 - `frontend/` — Next.js client (pnpm)
 
+### Backend conversion architecture
+- `backend/api/conversion/` — MCAP decode, telemetry normalization, and format writers (`csv_omni`, `csv_tvn`, `ld`)
+- `backend/api/services/conversion_service.py` — facade entrypoint used by Celery/export workflows
+- `backend/api/services/contracts.py` — typed request/result/progress contracts for conversion and caching
+- `backend/api/jobs/tasks_ingest.py` — recover/parse/gps/map pipeline tasks
+- `backend/api/jobs/tasks_export.py` — export item conversion + bundle finalization tasks
+- `backend/api/jobs/tasks_status.py` — cache payload builders for polling endpoints
+- `backend/api/tasks.py` — compatibility export module for task imports and Celery task names
+
 ### Quick start (uv + Docker infra, no Nix required)
 - Copy env file: `cp .env.example .env`
 - Start infrastructure: `docker compose -f compose.dev.yml up -d`
