@@ -1,7 +1,16 @@
 from django.test import SimpleTestCase
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
+from .ld_writer import write_ld_file
 from .mcap_converter import McapToCsvConverter
+from .services.contracts import ConversionRequest, ExportProgressSnapshot
+from .services.conversion_service import McapConversionService
+from .services.status_constants import is_export_terminal, is_mcap_terminal
 from .serializers import DownloadRequestSerializer, ExportCreateRequestSerializer
+from .telemetry_log import DataLog
 
 
 class DownloadRequestSerializerTests(SimpleTestCase):
@@ -40,3 +49,235 @@ class McapConverterResampleTests(SimpleTestCase):
 
         self.assertEqual([row[0] for row in result], [0, 500_000_000, 1_000_000_000])
         self.assertEqual(result[-1][1]["speed"], "3")
+
+
+class DataLogTests(SimpleTestCase):
+    def test_datalog_resample_aligns_channels_to_common_timebase(self):
+        log = DataLog(name="test")
+        log.add_sample("speed", 10.0, 1.0)
+        log.add_sample("speed", 10.5, 2.0)
+        log.add_sample("rpm", 10.25, 1000.0)
+        log.add_sample("rpm", 10.75, 2000.0)
+
+        log.resample(2.0)
+
+        speed = log.channels["speed"].messages
+        rpm = log.channels["rpm"].messages
+        self.assertEqual(len(speed), len(rpm))
+        self.assertEqual([m.timestamp for m in speed], [10.0, 10.5, 10.75])
+        self.assertEqual([m.value for m in speed], [1.0, 2.0, 2.0])
+        self.assertEqual([m.value for m in rpm], [0.0, 1000.0, 1000.0])
+
+
+class McapConverterFieldExtractionTests(SimpleTestCase):
+    class _Field:
+        LABEL_REPEATED = 3
+
+        def __init__(self, name, label=1):
+            self.name = name
+            self.label = label
+
+    class _Proto:
+        def ListFields(self):
+            return [
+                (McapConverterFieldExtractionTests._Field("speed"), 123.4),
+                (McapConverterFieldExtractionTests._Field("gear"), 3),
+                (McapConverterFieldExtractionTests._Field("valid"), True),
+                (McapConverterFieldExtractionTests._Field("name"), "abc"),
+                (
+                    McapConverterFieldExtractionTests._Field(
+                        "samples",
+                        label=McapConverterFieldExtractionTests._Field.LABEL_REPEATED,
+                    ),
+                    [1, 2, 3],
+                ),
+            ]
+
+    def test_iter_numeric_fields_filters_to_numeric_scalars(self):
+        converter = McapToCsvConverter()
+        values = converter._iter_numeric_fields(self._Proto())
+        self.assertEqual(values, [("speed", 123.4), ("gear", 3.0), ("valid", 1.0)])
+
+
+class LdWriterTests(SimpleTestCase):
+    def test_write_ld_file_uses_native_backend_without_env(self):
+        datalog = DataLog(name="test")
+        datalog.add_sample("speed", 0.0, 1.0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "native.ld"
+            os.environ.pop("MOTEC_LD_WRITER_CMD", None)
+            os.environ.pop("MOTEC_LOG_GENERATOR_DIR", None)
+            write_ld_file(datalog, output_path, 20.0)
+            self.assertTrue(output_path.exists())
+            self.assertGreater(output_path.stat().st_size, 0)
+
+    def test_write_ld_file_invokes_external_command(self):
+        datalog = DataLog(name="test")
+        datalog.add_sample("speed", 0.0, 1.0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "export.ld"
+            os.environ["MOTEC_LD_WRITER_CMD"] = (
+                "python -c \"open('{output}','wb').write(b'LD')\""
+            )
+            try:
+                with patch(
+                    "api.conversion.ld_writer.write_ld_native",
+                    side_effect=RuntimeError("native failed"),
+                ):
+                    write_ld_file(datalog, output_path, 20.0)
+                self.assertTrue(output_path.exists())
+                self.assertEqual(output_path.read_bytes(), b"LD")
+            finally:
+                os.environ.pop("MOTEC_LD_WRITER_CMD", None)
+
+    def test_write_ld_file_surfaces_writer_failure(self):
+        datalog = DataLog(name="test")
+        datalog.add_sample("speed", 0.0, 1.0)
+
+        os.environ["MOTEC_LD_WRITER_CMD"] = 'python -c "import sys; sys.exit(4)"'
+        try:
+            with patch(
+                "api.conversion.ld_writer.write_ld_native",
+                side_effect=RuntimeError("native failed"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    write_ld_file(datalog, Path("/tmp/out.ld"), 20.0)
+        finally:
+            os.environ.pop("MOTEC_LD_WRITER_CMD", None)
+
+    def test_write_ld_file_supports_motec_log_generator_dir(self):
+        datalog = DataLog(name="test")
+        datalog.add_sample("speed", 0.0, 1.0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            generator_dir = Path(temp_dir) / "MotecLogGenerator"
+            generator_dir.mkdir(parents=True, exist_ok=True)
+            (generator_dir / "motec_log_generator.py").write_text("# stub\n")
+
+            output_path = Path(temp_dir) / "export.ld"
+            os.environ["MOTEC_LOG_GENERATOR_DIR"] = str(generator_dir)
+
+            def _fake_run(command_parts, capture_output, text, cwd):
+                output_path.write_bytes(b"LD")
+
+                class _Result:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                return _Result()
+
+            try:
+                with patch(
+                    "api.conversion.ld_writer.write_ld_native",
+                    side_effect=RuntimeError("native failed"),
+                ):
+                    with patch(
+                        "api.conversion.ld_writer.subprocess.run", side_effect=_fake_run
+                    ):
+                        write_ld_file(datalog, output_path, 20.0)
+                self.assertTrue(output_path.exists())
+            finally:
+                os.environ.pop("MOTEC_LOG_GENERATOR_DIR", None)
+
+
+class ConversionServiceTests(SimpleTestCase):
+    def test_convert_to_ld_delegates_to_converter_with_ld_format(self):
+        class _StubConverter:
+            def __init__(self):
+                self.calls = []
+
+            def convert_to_csv(self, source, output, format, resample_hz):
+                self.calls.append(
+                    {
+                        "source": source,
+                        "output": output,
+                        "format": format,
+                        "resample_hz": resample_hz,
+                    }
+                )
+                return output
+
+        stub = _StubConverter()
+        service = McapConversionService(converter=stub)
+
+        result = service.convert_to_ld("/tmp/in.mcap", "/tmp/out.ld", 25.0)
+
+        self.assertEqual(result, "/tmp/out.ld")
+        self.assertEqual(len(stub.calls), 1)
+        self.assertEqual(stub.calls[0]["format"], "ld")
+        self.assertEqual(stub.calls[0]["resample_hz"], 25.0)
+
+    def test_convert_with_result_returns_error_without_raising(self):
+        class _FailingConverter:
+            def convert_to_csv(self, source, output, format, resample_hz):
+                raise RuntimeError("boom")
+
+        service = McapConversionService(converter=_FailingConverter())
+        result = service.convert_with_result(
+            ConversionRequest(
+                source_path=Path("/tmp/in.mcap"),
+                output_path=Path("/tmp/out.ld"),
+                format_suffix="ld",
+                resample_hz=20.0,
+            )
+        )
+        self.assertFalse(result.success)
+        self.assertIn("boom", result.error)
+
+
+class StatusConstantsTests(SimpleTestCase):
+    def test_is_mcap_terminal_handles_error_prefix(self):
+        self.assertTrue(is_mcap_terminal("error: failed to parse"))
+        self.assertTrue(is_mcap_terminal("completed"))
+        self.assertFalse(is_mcap_terminal("processing"))
+
+    def test_is_export_terminal_matches_terminal_states(self):
+        self.assertTrue(is_export_terminal("completed"))
+        self.assertTrue(is_export_terminal("completed_with_errors"))
+        self.assertFalse(is_export_terminal("processing"))
+
+
+class ContractsTests(SimpleTestCase):
+    def test_export_progress_snapshot_payload_shape(self):
+        snapshot = ExportProgressSnapshot(
+            id=7,
+            status="processing",
+            format="ld",
+            resample_hz=20.0,
+            error_message=None,
+            total_items=4,
+            completed_items=1,
+            failed_items=0,
+            progress_percent=25,
+        )
+        payload = snapshot.to_payload()
+        self.assertEqual(payload["id"], 7)
+        self.assertEqual(payload["progress_percent"], 25)
+
+
+class TaskSplitCompatibilityTests(SimpleTestCase):
+    def test_tasks_module_exports_named_celery_tasks(self):
+        from . import tasks as tasks_module
+
+        self.assertEqual(
+            tasks_module.recover_mcap_file.name, "api.tasks.recover_mcap_file"
+        )
+        self.assertEqual(tasks_module.parse_mcap_file.name, "api.tasks.parse_mcap_file")
+        self.assertEqual(
+            tasks_module.convert_export_item.name, "api.tasks.convert_export_item"
+        )
+        self.assertEqual(
+            tasks_module.finalize_export_job.name, "api.tasks.finalize_export_job"
+        )
+
+    def test_conversion_shims_point_to_new_modules(self):
+        from .conversion.mcap_converter import McapToCsvConverter as NewConverter
+        from .conversion.telemetry_log import DataLog as NewDataLog
+        from .mcap_converter import McapToCsvConverter as ShimConverter
+        from .telemetry_log import DataLog as ShimDataLog
+
+        self.assertIs(ShimConverter, NewConverter)
+        self.assertIs(ShimDataLog, NewDataLog)
