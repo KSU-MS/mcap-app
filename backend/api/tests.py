@@ -1,8 +1,11 @@
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
 import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
+
+from rest_framework.test import APIClient
 
 from .conversion.ld_writer import write_ld_file
 from .conversion.mcap_converter import McapToCsvConverter
@@ -10,6 +13,7 @@ from .services.contracts import ConversionRequest, ExportProgressSnapshot
 from .services.conversion_service import McapConversionService
 from .services.status_constants import is_export_terminal, is_mcap_terminal
 from .serializers import DownloadRequestSerializer, ExportCreateRequestSerializer
+from .models import ExportJob, McapLog
 from .conversion.telemetry_log import DataLog
 
 
@@ -279,3 +283,70 @@ class TaskSplitCompatibilityTests(SimpleTestCase):
 
         self.assertIsNotNone(NewConverter)
         self.assertIsNotNone(NewDataLog)
+
+
+class ExportAuthAccessTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="alice", password="password123"
+        )
+        self.other_user = get_user_model().objects.create_user(
+            username="bob", password="password123"
+        )
+
+    def test_export_status_allows_authenticated_access_to_public_job(self):
+        public_job = ExportJob.objects.create(
+            user=None,
+            format="csv_omni",
+            resample_hz=20.0,
+            status="processing",
+            requested_ids=[],
+        )
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(f"/api/mcap-logs/exports/{public_job.id}/status/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], public_job.id)
+
+    def test_export_status_requires_authentication(self):
+        private_job = ExportJob.objects.create(
+            user=self.user,
+            format="csv_tvn",
+            resample_hz=20.0,
+            status="processing",
+            requested_ids=[],
+        )
+
+        response = self.client.get(f"/api/mcap-logs/exports/{private_job.id}/status/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_export_download_requires_authentication(self):
+        private_job = ExportJob.objects.create(
+            user=self.user,
+            format="ld",
+            resample_hz=20.0,
+            status="completed",
+            requested_ids=[],
+            zip_uri="/media/exports/999/bundle.zip",
+        )
+
+        response = self.client.get(f"/api/mcap-logs/exports/{private_job.id}/download/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_create_export_job_requires_authentication(self):
+        private_log = McapLog.objects.create(
+            user=self.user,
+            file_name="private.mcap",
+        )
+
+        response = self.client.post(
+            "/api/mcap-logs/exports/",
+            data={"ids": [private_log.id], "format": "csv_omni", "resample_hz": 20.0},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)

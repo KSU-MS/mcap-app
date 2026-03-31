@@ -1,5 +1,6 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from .models import McapLog
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -13,6 +14,7 @@ from .parser import Parser
 from .gpsparse import GpsParser
 from .tasks import recover_mcap_file
 from .views_export import ExportActionsMixin
+from .permissions import IsOwnerOrSharedUserResource
 import os
 import hashlib
 import datetime
@@ -30,6 +32,10 @@ from celery.result import AsyncResult
 class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
     queryset = McapLog.objects.all()
     serializer_class = McapLogSerializer
+    permission_classes = [IsAuthenticated, IsOwnerOrSharedUserResource]
+
+    def _visible_logs_queryset(self, request):
+        return McapLog.objects.filter(Q(user=request.user) | Q(user__isnull=True))
 
     def get_queryset(self):
         """
@@ -53,9 +59,7 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         Returns: Filtered queryset ordered by creation date (newest first)
         """
         # Start with all McapLog objects, scoped to current user when authenticated
-        queryset = McapLog.objects.all()
-        if self.request.user.is_authenticated:
-            queryset = queryset.filter(Q(user=self.request.user) | Q(user__isnull=True))
+        queryset = self._visible_logs_queryset(self.request)
 
         # ===== TEXT SEARCH =====
         # Search across log text + free-form metadata arrays (case-insensitive partial match)
@@ -177,17 +181,12 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         return queryset.order_by("-created_at")
 
     def perform_create(self, serializer):
-        if self.request.user.is_authenticated:
-            serializer.save(user=self.request.user)
-        else:
-            serializer.save()
+        serializer.save(user=self.request.user)
 
     def _find_duplicate_log(self, request, content_sha256: str):
-        queryset = McapLog.objects.filter(content_sha256=content_sha256)
-        if request.user.is_authenticated:
-            queryset = queryset.filter(Q(user=request.user) | Q(user__isnull=True))
-        else:
-            queryset = queryset.filter(user__isnull=True)
+        queryset = self._visible_logs_queryset(request).filter(
+            content_sha256=content_sha256
+        )
         return queryset.order_by("-created_at").first()
 
     def list(self, request, *args, **kwargs):
@@ -427,7 +426,7 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         )
 
         # Get the McapLog objects
-        mcap_logs = McapLog.objects.filter(id__in=log_ids)
+        mcap_logs = self._visible_logs_queryset(request).filter(id__in=log_ids)
 
         if not mcap_logs.exists():
             return Response(
@@ -891,7 +890,7 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
 
                 # Create database record
                 mcap_log = McapLog.objects.create(
-                    user=request.user if request.user.is_authenticated else None,
+                    user=request.user,
                     file_name=uploaded_file.name,
                     original_uri=f"{settings.MCAP_LOGS_URI_PREFIX}/{file_name}",
                     file_size=file_size,
@@ -931,7 +930,7 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         Get parsing job statuses for all MCAP logs.
         Optionally filter by parse_status query parameter.
         """
-        queryset = McapLog.objects.all()
+        queryset = self._visible_logs_queryset(request)
 
         # Filter by status if provided
         status_filter = request.query_params.get("status", None)
@@ -1036,9 +1035,7 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         return Response(self._distinct_json_values("channels"))
 
     def _distinct_json_values(self, field_name):
-        queryset = McapLog.objects
-        if self.request.user.is_authenticated:
-            queryset = queryset.filter(Q(user=self.request.user) | Q(user__isnull=True))
+        queryset = self._visible_logs_queryset(self.request)
         seen = set()
         for values in queryset.exclude(**{field_name: []}).values_list(
             field_name, flat=True
@@ -1051,6 +1048,8 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
 
 
 class ParseSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
         """
         Parse MCAP file summary without creating a database record.

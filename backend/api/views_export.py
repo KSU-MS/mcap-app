@@ -14,6 +14,12 @@ from .tasks import enqueue_export_job
 
 
 class ExportActionsMixin:
+    def _visible_logs_queryset(self, request):
+        return McapLog.objects.filter(Q(user=request.user) | Q(user__isnull=True))
+
+    def _visible_export_jobs_queryset(self, request):
+        return ExportJob.objects.filter(Q(user=request.user) | Q(user__isnull=True))
+
     @action(detail=False, methods=["post"], url_path="exports")
     def create_export_job(self, request):
         serializer = ExportCreateRequestSerializer(data=request.data)
@@ -25,10 +31,7 @@ class ExportActionsMixin:
             "resample_hz", settings.MOTEC_RESAMPLE_HZ_DEFAULT
         )
 
-        logs_qs = McapLog.objects.filter(id__in=normalized_ids)
-        if request.user.is_authenticated:
-            logs_qs = logs_qs.filter(Q(user=request.user) | Q(user__isnull=True))
-        logs = list(logs_qs)
+        logs = list(self._visible_logs_queryset(request).filter(id__in=normalized_ids))
         found_ids = {log.id for log in logs}
         missing_ids = sorted(set(normalized_ids) - found_ids)
         if missing_ids:
@@ -37,22 +40,24 @@ class ExportActionsMixin:
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if request.user.is_authenticated:
-            active_jobs = ExportJob.objects.filter(
-                user=request.user,
+        active_jobs = (
+            self._visible_export_jobs_queryset(request)
+            .filter(
                 status__in=["pending", "processing"],
                 format=output_format,
                 resample_hz=resample_hz,
-            ).order_by("-created_at")
-            for existing in active_jobs:
-                existing_ids = sorted(existing.requested_ids or [])
-                if existing_ids == normalized_ids:
-                    return Response(
-                        ExportJobSerializer(existing).data, status=status.HTTP_200_OK
-                    )
+            )
+            .order_by("-created_at")
+        )
+        for existing in active_jobs:
+            existing_ids = sorted(existing.requested_ids or [])
+            if existing_ids == normalized_ids:
+                return Response(
+                    ExportJobSerializer(existing).data, status=status.HTTP_200_OK
+                )
 
         job = ExportJob.objects.create(
-            user=request.user if request.user.is_authenticated else None,
+            user=request.user,
             format=output_format,
             resample_hz=resample_hz,
             status="pending",
@@ -76,25 +81,21 @@ class ExportActionsMixin:
                 {"error": "Missing job id"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        if request.user.is_authenticated:
-            owns_job = ExportJob.objects.filter(id=job_id, user=request.user).exists()
-            if not owns_job:
-                return Response(status=status.HTTP_403_FORBIDDEN)
-
-        cached = cache.get(f"export_status:{job_id}")
-        if cached:
-            return Response(cached, status=status.HTTP_200_OK)
-
         try:
-            job = ExportJob.objects.prefetch_related("items__mcap_log").get(id=job_id)
+            job = (
+                self._visible_export_jobs_queryset(request)
+                .prefetch_related("items__mcap_log")
+                .get(id=job_id)
+            )
         except ExportJob.DoesNotExist:
             return Response(
                 {"error": f"Export job {job_id} not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if request.user.is_authenticated and job.user_id not in (None, request.user.id):
-            return Response(status=status.HTTP_403_FORBIDDEN)
+        cached = cache.get(f"export_status:{job_id}")
+        if cached:
+            return Response(cached, status=status.HTTP_200_OK)
 
         return Response(ExportJobSerializer(job).data, status=status.HTTP_200_OK)
 
@@ -105,15 +106,12 @@ class ExportActionsMixin:
     )
     def export_download(self, request, job_id=None):
         try:
-            job = ExportJob.objects.get(id=job_id)
+            job = self._visible_export_jobs_queryset(request).get(id=job_id)
         except ExportJob.DoesNotExist:
             return Response(
                 {"error": f"Export job {job_id} not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
-        if request.user.is_authenticated and job.user_id not in (None, request.user.id):
-            return Response(status=status.HTTP_403_FORBIDDEN)
 
         if job.status not in ["completed", "completed_with_errors"] or not job.zip_uri:
             return Response(
@@ -147,12 +145,9 @@ class ExportActionsMixin:
 
     @action(detail=False, methods=["get"], url_path="exports/active")
     def active_exports(self, request):
-        if not request.user.is_authenticated:
-            return Response([], status=status.HTTP_200_OK)
-
         jobs = (
-            ExportJob.objects.filter(
-                user=request.user,
+            self._visible_export_jobs_queryset(request)
+            .filter(
                 status__in=["pending", "processing"],
             )
             .prefetch_related("items")
