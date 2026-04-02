@@ -6,14 +6,21 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .models import WorkspaceMember
+
 
 def _user_payload(user):
+    memberships = WorkspaceMember.objects.filter(user=user).select_related("workspace")
     return {
         "id": user.id,
         "username": user.username,
         "email": user.email,
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
+        "workspace_ids": [m.workspace_id for m in memberships],
+        "default_workspace_id": memberships.order_by("workspace_id")
+        .values_list("workspace_id", flat=True)
+        .first(),
     }
 
 

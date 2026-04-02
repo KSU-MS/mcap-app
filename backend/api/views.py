@@ -14,7 +14,8 @@ from .parser import Parser
 from .gpsparse import GpsParser
 from .tasks import recover_mcap_file
 from .views_export import ExportActionsMixin
-from .permissions import IsOwnerOrSharedUserResource
+from .permissions import IsWorkspaceMember
+from .workspace import resolve_workspace_for_request
 import os
 import hashlib
 import datetime
@@ -32,11 +33,15 @@ from celery.result import AsyncResult
 class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
     queryset = McapLog.objects.all()
     serializer_class = McapLogSerializer
-    permission_classes = [IsAuthenticated, IsOwnerOrSharedUserResource]
+    permission_classes = [IsAuthenticated, IsWorkspaceMember]
 
     @staticmethod
-    def _has_user_field():
-        return any(field.name == "user" for field in McapLog._meta.get_fields())
+    def _has_workspace_field():
+        return any(field.name == "workspace" for field in McapLog._meta.get_fields())
+
+    @staticmethod
+    def _has_created_by_field():
+        return any(field.name == "created_by" for field in McapLog._meta.get_fields())
 
     @staticmethod
     def _has_content_sha_field():
@@ -45,9 +50,14 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         )
 
     def _visible_logs_queryset(self, request):
-        if not self._has_user_field():
+        workspace = getattr(self, "workspace", None) or resolve_workspace_for_request(
+            request
+        )
+        if workspace is None:
+            return McapLog.objects.none()
+        if not self._has_workspace_field():
             return McapLog.objects.all()
-        return McapLog.objects.filter(Q(user=request.user) | Q(user__isnull=True))
+        return McapLog.objects.filter(workspace=workspace)
 
     def get_queryset(self):
         """
@@ -193,10 +203,16 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         return queryset.order_by("-created_at")
 
     def perform_create(self, serializer):
-        if self._has_user_field():
-            serializer.save(user=self.request.user)
+        workspace = getattr(self, "workspace", None) or resolve_workspace_for_request(
+            self.request
+        )
+        if workspace is None:
+            serializer.save()
             return
-        serializer.save()
+        kwargs = {"workspace": workspace}
+        if self._has_created_by_field():
+            kwargs["created_by"] = self.request.user
+        serializer.save(**kwargs)
 
     def _find_duplicate_log(self, request, content_sha256: str):
         if not self._has_content_sha_field():
@@ -915,8 +931,13 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
                     "gps_status": "pending",
                     "map_preview_status": "pending",
                 }
-                if self._has_user_field():
-                    create_kwargs["user"] = request.user
+                workspace = getattr(
+                    self, "workspace", None
+                ) or resolve_workspace_for_request(request)
+                if workspace is not None and self._has_workspace_field():
+                    create_kwargs["workspace"] = workspace
+                if self._has_created_by_field():
+                    create_kwargs["created_by"] = request.user
                 if self._has_content_sha_field():
                     create_kwargs["content_sha256"] = content_sha256
                 mcap_log = McapLog.objects.create(**create_kwargs)

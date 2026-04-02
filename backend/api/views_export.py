@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from .models import ExportItem, ExportJob, McapLog
 from .serializers import ExportCreateRequestSerializer, ExportJobSerializer
 from .tasks import enqueue_export_job
+from .workspace import resolve_workspace_for_request
 
 
 class ExportActionsMixin:
@@ -22,12 +23,38 @@ class ExportActionsMixin:
     def _export_job_has_user_field():
         return any(field.name == "user" for field in ExportJob._meta.get_fields())
 
+    @staticmethod
+    def _mcap_has_workspace_field():
+        return any(field.name == "workspace" for field in McapLog._meta.get_fields())
+
+    @staticmethod
+    def _export_job_has_workspace_field():
+        return any(field.name == "workspace" for field in ExportJob._meta.get_fields())
+
+    @staticmethod
+    def _export_job_has_created_by_field():
+        return any(field.name == "created_by" for field in ExportJob._meta.get_fields())
+
     def _visible_logs_queryset(self, request):
+        workspace = getattr(self, "workspace", None) or resolve_workspace_for_request(
+            request
+        )
+        if workspace is None:
+            return McapLog.objects.none()
+        if self._mcap_has_workspace_field():
+            return McapLog.objects.filter(workspace=workspace)
         if not self._mcap_has_user_field():
             return McapLog.objects.all()
         return McapLog.objects.filter(Q(user=request.user) | Q(user__isnull=True))
 
     def _visible_export_jobs_queryset(self, request):
+        workspace = getattr(self, "workspace", None) or resolve_workspace_for_request(
+            request
+        )
+        if workspace is None:
+            return ExportJob.objects.none()
+        if self._export_job_has_workspace_field():
+            return ExportJob.objects.filter(workspace=workspace)
         if not self._export_job_has_user_field():
             return ExportJob.objects.all()
         return ExportJob.objects.filter(Q(user=request.user) | Q(user__isnull=True))
@@ -74,6 +101,13 @@ class ExportActionsMixin:
             "status": "pending",
             "requested_ids": normalized_ids,
         }
+        workspace = getattr(self, "workspace", None) or resolve_workspace_for_request(
+            request
+        )
+        if workspace is not None and self._export_job_has_workspace_field():
+            create_kwargs["workspace"] = workspace
+        if self._export_job_has_created_by_field():
+            create_kwargs["created_by"] = request.user
         if self._export_job_has_user_field():
             create_kwargs["user"] = request.user
         job = ExportJob.objects.create(**create_kwargs)

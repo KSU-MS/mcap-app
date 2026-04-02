@@ -13,7 +13,7 @@ from .services.contracts import ConversionRequest, ExportProgressSnapshot
 from .services.conversion_service import McapConversionService
 from .services.status_constants import is_export_terminal, is_mcap_terminal
 from .serializers import DownloadRequestSerializer, ExportCreateRequestSerializer
-from .models import ExportJob, McapLog
+from .models import ExportJob, McapLog, Workspace, WorkspaceMember
 from .conversion.telemetry_log import DataLog
 
 
@@ -294,10 +294,20 @@ class ExportAuthAccessTests(TestCase):
         self.other_user = get_user_model().objects.create_user(
             username="bob", password="password123"
         )
+        self.workspace = Workspace.objects.create(name="Team", slug="team")
+        self.other_workspace = Workspace.objects.create(name="Other", slug="other")
+        WorkspaceMember.objects.create(
+            user=self.user, workspace=self.workspace, role=WorkspaceMember.ROLE_ADMIN
+        )
+        WorkspaceMember.objects.create(
+            user=self.other_user,
+            workspace=self.other_workspace,
+            role=WorkspaceMember.ROLE_VIEWER,
+        )
 
-    def test_export_status_allows_authenticated_access_to_public_job(self):
+    def test_export_status_allows_authenticated_workspace_access(self):
         public_job = ExportJob.objects.create(
-            user=None,
+            workspace=self.workspace,
             format="csv_omni",
             resample_hz=20.0,
             status="processing",
@@ -305,14 +315,17 @@ class ExportAuthAccessTests(TestCase):
         )
 
         self.client.force_authenticate(user=self.user)
-        response = self.client.get(f"/api/mcap-logs/exports/{public_job.id}/status/")
+        response = self.client.get(
+            f"/api/mcap-logs/exports/{public_job.id}/status/?workspace_id={self.workspace.id}"
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["id"], public_job.id)
 
     def test_export_status_requires_authentication(self):
         private_job = ExportJob.objects.create(
-            user=self.user,
+            workspace=self.workspace,
+            created_by=self.user,
             format="csv_tvn",
             resample_hz=20.0,
             status="processing",
@@ -325,7 +338,8 @@ class ExportAuthAccessTests(TestCase):
 
     def test_export_download_requires_authentication(self):
         private_job = ExportJob.objects.create(
-            user=self.user,
+            workspace=self.workspace,
+            created_by=self.user,
             format="ld",
             resample_hz=20.0,
             status="completed",
@@ -339,7 +353,8 @@ class ExportAuthAccessTests(TestCase):
 
     def test_create_export_job_requires_authentication(self):
         private_log = McapLog.objects.create(
-            user=self.user,
+            workspace=self.workspace,
+            created_by=self.user,
             file_name="private.mcap",
         )
 
@@ -347,6 +362,23 @@ class ExportAuthAccessTests(TestCase):
             "/api/mcap-logs/exports/",
             data={"ids": [private_log.id], "format": "csv_omni", "resample_hz": 20.0},
             format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_workspace_member_cannot_access_other_workspace_job(self):
+        private_job = ExportJob.objects.create(
+            workspace=self.workspace,
+            created_by=self.user,
+            format="csv_tvn",
+            resample_hz=20.0,
+            status="processing",
+            requested_ids=[],
+        )
+
+        self.client.force_authenticate(user=self.other_user)
+        response = self.client.get(
+            f"/api/mcap-logs/exports/{private_job.id}/status/?workspace_id={self.workspace.id}"
         )
 
         self.assertEqual(response.status_code, 403)
