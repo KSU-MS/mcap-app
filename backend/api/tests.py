@@ -350,3 +350,43 @@ class ExportAuthAccessTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+
+class AuthSessionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient(enforce_csrf_checks=True)
+        self.username = "session-user"
+        self.password = "password123"
+        get_user_model().objects.create_user(
+            username=self.username,
+            password=self.password,
+            email="session@example.com",
+        )
+
+    def test_login_me_logout_roundtrip(self):
+        csrf_response = self.client.get("/api/auth/csrf/")
+        self.assertEqual(csrf_response.status_code, 200)
+        csrf_token = csrf_response.cookies.get("csrftoken").value
+
+        login_response = self.client.post(
+            "/api/auth/login/",
+            data={"username": self.username, "password": self.password},
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(login_response.data["username"], self.username)
+
+        me_response = self.client.get("/api/auth/me/")
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me_response.data["username"], self.username)
+
+        logout_response = self.client.post(
+            "/api/auth/logout/",
+            format="json",
+            HTTP_X_CSRFTOKEN=self.client.cookies.get("csrftoken").value,
+        )
+        self.assertEqual(logout_response.status_code, 204)
+
+        me_after_logout = self.client.get("/api/auth/me/")
+        self.assertEqual(me_after_logout.status_code, 403)

@@ -18,6 +18,7 @@ import { MapModal } from '@/components/mcap/modals/MapModal';
 import {
   fetchLogs, fetchLog, fetchGeoJson, fetchLookups,
   updateLog, deleteLogs, bulkDownload, checkDbStatus,
+  fetchCurrentUser, logoutSession,
 } from '@/lib/mcap/api';
 import type { McapLog, DownloadFormat, GeoJsonFeatureCollection, ResampleRateHz } from '@/lib/mcap/types';
 
@@ -61,7 +62,20 @@ function McapDashboard() {
   // ── DB indicator ──
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [mounted, setMounted] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        await fetchCurrentUser();
+        setAuthReady(true);
+      } catch {
+        router.replace('/login');
+      }
+    };
+    void checkAuth();
+  }, [router]);
 
   // ── Selection ──
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -120,6 +134,7 @@ function McapDashboard() {
 
   // ── Load logs whenever URL params change ──
   const loadLogs = useCallback(async () => {
+    if (!authReady) return;
     setLoading(true);
     setError(null);
     try {
@@ -132,14 +147,15 @@ function McapDashboard() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.toString()]);
+  }, [params.toString(), authReady]);
 
   useEffect(() => { loadLogs(); }, [loadLogs]);
 
   // ── Load lookups + DB status on mount ──
   useEffect(() => {
+    if (!authReady) return;
     fetchLookups().then(setLookups);
-  }, []);
+  }, [authReady]);
 
   useEffect(() => {
     const run = async () => {
@@ -297,6 +313,14 @@ function McapDashboard() {
     }
   };
 
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-sm" style={{ color: 'var(--sienna)' }}>Checking session…</p>
+      </div>
+    );
+  }
+
   // ══════════════════════════════
   //  RENDER
   // ══════════════════════════════
@@ -342,7 +366,8 @@ function McapDashboard() {
 
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-7">
+        <div className="mb-7 flex items-start justify-between gap-3">
+          <div>
           <h1 className="font-serif text-4xl" style={{ color: 'var(--charcoal)', fontWeight: 900, letterSpacing: '-0.03em' }}>
             MCAP{' '}
             <span style={{ color: 'var(--ochre)' }}>Log Manager</span>
@@ -350,6 +375,19 @@ function McapDashboard() {
           <p className="text-sm mt-1" style={{ color: 'var(--sienna)' }}>
             Upload, browse, and annotate MCAP telemetry logs.
           </p>
+          </div>
+          <button
+            className="skeuo-btn-ghost"
+            onClick={async () => {
+              try {
+                await logoutSession();
+              } finally {
+                router.replace('/login');
+              }
+            }}
+          >
+            Sign out
+          </button>
         </div>
 
         {/* Error banner */}

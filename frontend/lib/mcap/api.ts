@@ -27,6 +27,106 @@ function normalizeLog(log: McapLog): McapLog {
     };
 }
 
+function getCookie(name: string): string | null {
+    if (typeof document === 'undefined') return null;
+    const prefix = `${name}=`;
+    const parts = document.cookie.split(';');
+    for (const rawPart of parts) {
+        const part = rawPart.trim();
+        if (part.startsWith(prefix)) {
+            return decodeURIComponent(part.slice(prefix.length));
+        }
+    }
+    return null;
+}
+
+let csrfPrimed = false;
+
+async function ensureCsrfCookie(): Promise<void> {
+    if (csrfPrimed && getCookie('csrftoken')) return;
+    const response = await fetch(`${API_BASE_URL}/auth/csrf/`, {
+        method: 'GET',
+        credentials: 'include',
+    });
+    if (response.ok) csrfPrimed = true;
+}
+
+interface ApiFetchOptions extends RequestInit {
+    skipCsrf?: boolean;
+}
+
+async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Response> {
+    const method = (options.method ?? 'GET').toUpperCase();
+    const isUnsafe = !['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method);
+
+    if (isUnsafe && !options.skipCsrf) {
+        await ensureCsrfCookie();
+    }
+
+    const headers = new Headers(options.headers ?? {});
+    if (isUnsafe && !options.skipCsrf) {
+        const csrfToken = getCookie('csrftoken');
+        if (csrfToken) headers.set('X-CSRFToken', csrfToken);
+    }
+
+    return fetch(url, {
+        ...options,
+        headers,
+        credentials: 'include',
+    });
+}
+
+async function getErrorMessage(response: Response, fallback: string): Promise<string> {
+    try {
+        const data = await response.json();
+        return data.detail ?? data.error ?? data.message ?? fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+export interface AuthUser {
+    id: number;
+    username: string;
+    email: string;
+    is_staff: boolean;
+    is_superuser: boolean;
+}
+
+export async function fetchCurrentUser(): Promise<AuthUser> {
+    const res = await apiFetch(`${API_BASE_URL}/auth/me/`);
+    if (!res.ok) {
+        throw new Error(await getErrorMessage(res, `Failed to fetch current user: ${res.statusText}`));
+    }
+    return res.json();
+}
+
+export async function loginWithPassword(username: string, password: string): Promise<AuthUser> {
+    await ensureCsrfCookie();
+    const csrfToken = getCookie('csrftoken');
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    if (csrfToken) {
+        headers['X-CSRFToken'] = csrfToken;
+    }
+    const res = await apiFetch(`${API_BASE_URL}/auth/login/`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ username, password }),
+        skipCsrf: true,
+    });
+    if (!res.ok) {
+        throw new Error(await getErrorMessage(res, `Login failed: ${res.statusText}`));
+    }
+    return res.json();
+}
+
+export async function logoutSession(): Promise<void> {
+    const res = await apiFetch(`${API_BASE_URL}/auth/logout/`, { method: 'POST' });
+    if (!res.ok && res.status !== 401 && res.status !== 403) {
+        throw new Error(await getErrorMessage(res, `Logout failed: ${res.statusText}`));
+    }
+}
+
 /** Fetch a paginated + filtered list of logs */
 export async function fetchLogs(filters: LogFilters): Promise<{ logs: McapLog[]; total: number }> {
     const params = new URLSearchParams();
@@ -41,8 +141,8 @@ export async function fetchLogs(filters: LogFilters): Promise<{ logs: McapLog[];
     if (filters.channel?.trim()) params.set('channel', filters.channel.trim());
     if (filters.tag?.trim()) params.set('tag', filters.tag.trim());
 
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/?${params.toString()}`);
-    if (!res.ok) throw new Error(`Failed to fetch logs: ${res.statusText}`);
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/?${params.toString()}`);
+    if (!res.ok) throw new Error(await getErrorMessage(res, `Failed to fetch logs: ${res.statusText}`));
     const data = await res.json();
 
     if (Array.isArray(data)) return { logs: data.map(normalizeLog), total: data.length };
@@ -52,15 +152,15 @@ export async function fetchLogs(filters: LogFilters): Promise<{ logs: McapLog[];
 
 /** Fetch a single log by ID */
 export async function fetchLog(id: number): Promise<McapLog> {
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`);
-    if (!res.ok) throw new Error(`Failed to fetch log ${id}: ${res.statusText}`);
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/${id}/`);
+    if (!res.ok) throw new Error(await getErrorMessage(res, `Failed to fetch log ${id}: ${res.statusText}`));
     return normalizeLog(await res.json());
 }
 
 /** Fetch GeoJSON for a log */
 export async function fetchGeoJson(id: number): Promise<GeoJsonFeatureCollection> {
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/geojson`);
-    if (!res.ok) throw new Error(`Failed to fetch GeoJSON: ${res.statusText}`);
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/${id}/geojson`);
+    if (!res.ok) throw new Error(await getErrorMessage(res, `Failed to fetch GeoJSON: ${res.statusText}`));
     return await res.json();
 }
 
@@ -70,28 +170,22 @@ export async function updateLog(
     body: Partial<Pick<McapLog, 'cars' | 'drivers' | 'event_types' | 'locations' | 'notes' | 'tags'>>,
     method: 'PATCH' | 'PUT' = 'PATCH',
 ): Promise<McapLog> {
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`, {
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/${id}/`, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
     if (!res.ok) {
-        let msg = `Update failed: ${res.statusText}`;
-        try {
-            const err = await res.json();
-            msg = err.detail ?? err.message ?? JSON.stringify(err);
-        } catch { }
-        throw new Error(msg);
+        throw new Error(await getErrorMessage(res, `Update failed: ${res.statusText}`));
     }
     return res.json();
 }
 
 /** DELETE a single log */
 export async function deleteLog(id: number): Promise<void> {
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/`, { method: 'DELETE' });
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/${id}/`, { method: 'DELETE' });
     if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail ?? err.message ?? `Delete failed: ${res.statusText}`);
+        throw new Error(await getErrorMessage(res, `Delete failed: ${res.statusText}`));
     }
 }
 
@@ -108,13 +202,12 @@ export async function deleteLogs(ids: number[]): Promise<void> {
 export async function uploadFiles(files: File[]): Promise<number[]> {
     const formData = new FormData();
     for (const f of files) formData.append('files', f);
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/batch-upload/`, {
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/batch-upload/`, {
         method: 'POST',
         body: formData,
     });
     if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail ?? err.message ?? `Upload failed: ${res.statusText}`);
+        throw new Error(await getErrorMessage(res, `Upload failed: ${res.statusText}`));
     }
     const payload = (await res.json().catch(() => null)) as { results?: Array<{ id?: number }> } | null;
     if (!payload?.results) return [];
@@ -125,8 +218,8 @@ export async function uploadFiles(files: File[]): Promise<number[]> {
 
 /** Download MCAP file for a single log */
 export async function downloadLog(id: number): Promise<void> {
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/${id}/download`);
-    if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/${id}/download`);
+    if (!res.ok) throw new Error(await getErrorMessage(res, `Download failed: ${res.statusText}`));
     const contentDisposition = res.headers.get('Content-Disposition');
     let filename = `mcap-log-${id}.mcap`;
     if (contentDisposition) {
@@ -151,18 +244,13 @@ export async function bulkDownload(ids: number[], format: DownloadFormat, resamp
         payload.resample_hz = resampleHz;
     }
 
-    const res = await fetch(`${API_BASE_URL}/mcap-logs/download/`, {
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/download/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
     });
     if (!res.ok) {
-        let message = `Failed to download: ${res.statusText}`;
-        try {
-            const data = await res.json();
-            message = data.error ?? message;
-        } catch { }
-        throw new Error(message);
+        throw new Error(await getErrorMessage(res, `Failed to download: ${res.statusText}`));
     }
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
@@ -202,12 +290,12 @@ export async function fetchLookups(): Promise<{
 
     try {
         const [carRes, driverRes, eventRes, locationRes, tagRes, channelRes] = await Promise.all([
-            fetch(`${API_BASE_URL}/mcap-logs/car-names/`),
-            fetch(`${API_BASE_URL}/mcap-logs/driver-names/`),
-            fetch(`${API_BASE_URL}/mcap-logs/event-type-names/`),
-            fetch(`${API_BASE_URL}/mcap-logs/location-names/`),
-            fetch(`${API_BASE_URL}/mcap-logs/tag-names/`),
-            fetch(`${API_BASE_URL}/mcap-logs/channel-names/`),
+            apiFetch(`${API_BASE_URL}/mcap-logs/car-names/`),
+            apiFetch(`${API_BASE_URL}/mcap-logs/driver-names/`),
+            apiFetch(`${API_BASE_URL}/mcap-logs/event-type-names/`),
+            apiFetch(`${API_BASE_URL}/mcap-logs/location-names/`),
+            apiFetch(`${API_BASE_URL}/mcap-logs/tag-names/`),
+            apiFetch(`${API_BASE_URL}/mcap-logs/channel-names/`),
         ]);
 
         return {
@@ -223,10 +311,10 @@ export async function fetchLookups(): Promise<{
     }
 }
 
-/** Check if the backend is reachable */
+/** Check if the backend is reachable with current session */
 export async function checkDbStatus(): Promise<boolean> {
     try {
-        const res = await fetch(`${API_BASE_URL}/mcap-logs/?page=1`);
+        const res = await apiFetch(`${API_BASE_URL}/mcap-logs/?page=1`);
         return res.ok;
     } catch {
         return false;

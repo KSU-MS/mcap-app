@@ -6,6 +6,7 @@ from api.views import (
     McapLogViewSet,
     ParseSummaryView,
 )
+from api.auth_views import CsrfTokenView, LoginView, LogoutView, MeView
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 
@@ -58,6 +59,10 @@ urlpatterns = [
     # API routes with /api/ prefix (recommended)
     path("api/", include(router.urls)),
     path("api/parse/summary/", ParseSummaryView.as_view(), name="parse-summary"),
+    path("api/auth/csrf/", CsrfTokenView.as_view(), name="auth-csrf"),
+    path("api/auth/login/", LoginView.as_view(), name="auth-login"),
+    path("api/auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("api/auth/me/", MeView.as_view(), name="auth-me"),
     # Root-level routes (for backward compatibility)
     path("", include(router.urls)),
     path("parse/summary/", ParseSummaryView.as_view(), name="parse-summary-root"),

@@ -14,10 +14,22 @@ from .tasks import enqueue_export_job
 
 
 class ExportActionsMixin:
+    @staticmethod
+    def _mcap_has_user_field():
+        return any(field.name == "user" for field in McapLog._meta.get_fields())
+
+    @staticmethod
+    def _export_job_has_user_field():
+        return any(field.name == "user" for field in ExportJob._meta.get_fields())
+
     def _visible_logs_queryset(self, request):
+        if not self._mcap_has_user_field():
+            return McapLog.objects.all()
         return McapLog.objects.filter(Q(user=request.user) | Q(user__isnull=True))
 
     def _visible_export_jobs_queryset(self, request):
+        if not self._export_job_has_user_field():
+            return ExportJob.objects.all()
         return ExportJob.objects.filter(Q(user=request.user) | Q(user__isnull=True))
 
     @action(detail=False, methods=["post"], url_path="exports")
@@ -56,13 +68,15 @@ class ExportActionsMixin:
                     ExportJobSerializer(existing).data, status=status.HTTP_200_OK
                 )
 
-        job = ExportJob.objects.create(
-            user=request.user,
-            format=output_format,
-            resample_hz=resample_hz,
-            status="pending",
-            requested_ids=normalized_ids,
-        )
+        create_kwargs = {
+            "format": output_format,
+            "resample_hz": resample_hz,
+            "status": "pending",
+            "requested_ids": normalized_ids,
+        }
+        if self._export_job_has_user_field():
+            create_kwargs["user"] = request.user
+        job = ExportJob.objects.create(**create_kwargs)
         ExportItem.objects.bulk_create(
             [ExportItem(job=job, mcap_log=log, status="pending") for log in logs]
         )

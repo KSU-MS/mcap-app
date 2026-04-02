@@ -34,7 +34,19 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
     serializer_class = McapLogSerializer
     permission_classes = [IsAuthenticated, IsOwnerOrSharedUserResource]
 
+    @staticmethod
+    def _has_user_field():
+        return any(field.name == "user" for field in McapLog._meta.get_fields())
+
+    @staticmethod
+    def _has_content_sha_field():
+        return any(
+            field.name == "content_sha256" for field in McapLog._meta.get_fields()
+        )
+
     def _visible_logs_queryset(self, request):
+        if not self._has_user_field():
+            return McapLog.objects.all()
         return McapLog.objects.filter(Q(user=request.user) | Q(user__isnull=True))
 
     def get_queryset(self):
@@ -181,9 +193,14 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         return queryset.order_by("-created_at")
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        if self._has_user_field():
+            serializer.save(user=self.request.user)
+            return
+        serializer.save()
 
     def _find_duplicate_log(self, request, content_sha256: str):
+        if not self._has_content_sha_field():
+            return None
         queryset = self._visible_logs_queryset(request).filter(
             content_sha256=content_sha256
         )
@@ -889,17 +906,20 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
                 file_size = file_path.stat().st_size
 
                 # Create database record
-                mcap_log = McapLog.objects.create(
-                    user=request.user,
-                    file_name=uploaded_file.name,
-                    original_uri=f"{settings.MCAP_LOGS_URI_PREFIX}/{file_name}",
-                    file_size=file_size,
-                    content_sha256=content_sha256,
-                    parse_status="pending",
-                    recovery_status="pending",
-                    gps_status="pending",
-                    map_preview_status="pending",
-                )
+                create_kwargs = {
+                    "file_name": uploaded_file.name,
+                    "original_uri": f"{settings.MCAP_LOGS_URI_PREFIX}/{file_name}",
+                    "file_size": file_size,
+                    "parse_status": "pending",
+                    "recovery_status": "pending",
+                    "gps_status": "pending",
+                    "map_preview_status": "pending",
+                }
+                if self._has_user_field():
+                    create_kwargs["user"] = request.user
+                if self._has_content_sha_field():
+                    create_kwargs["content_sha256"] = content_sha256
+                mcap_log = McapLog.objects.create(**create_kwargs)
 
                 # Trigger recovery (which will trigger parsing when done)
                 recovery_task = recover_mcap_file.delay(mcap_log.id, saved_file_relpath)
