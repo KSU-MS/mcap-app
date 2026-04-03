@@ -75,6 +75,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "drf_yasg",  # Swagger/OpenAPI documentation
+    "channels",
     "api",
 ]
 
@@ -107,6 +108,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "backend.wsgi.application"
+ASGI_APPLICATION = "backend.asgi.application"
 
 
 # Database
@@ -247,6 +249,16 @@ REST_FRAMEWORK = {
 # Celery Configuration
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
+
+CHANNEL_REDIS_URL = env("CHANNEL_REDIS_URL", default=CELERY_BROKER_URL)
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [CHANNEL_REDIS_URL],
+        },
+    }
+}
 
 # Celery task settings
 CELERY_ACCEPT_CONTENT = ["json"]
