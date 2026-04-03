@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import 'leaflet/dist/leaflet.css';
@@ -20,6 +20,7 @@ import {
   updateLog, deleteLogs, bulkDownload, checkDbStatus,
   fetchCurrentUser, logoutSession,
 } from '@/lib/mcap/api';
+import { getWorkspaceSocketUrl, type WorkspaceSocketMessage, type WorkspaceSocketState } from '@/lib/mcap/ws';
 import type { McapLog, DownloadFormat, GeoJsonFeatureCollection, ResampleRateHz } from '@/lib/mcap/types';
 
 const PAGE_SIZE = 10;
@@ -63,12 +64,20 @@ function McapDashboard() {
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [mounted, setMounted] = useState(false);
   const [authReady, setAuthReady] = useState(false);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<number | null>(null);
+  const [wsState, setWsState] = useState<WorkspaceSocketState>('disconnected');
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const exportStatusRef = useRef<Record<number, string>>({});
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        await fetchCurrentUser();
+        const me = await fetchCurrentUser();
+        const nextWorkspaceId = me.default_workspace_id ?? me.workspace_ids?.[0] ?? null;
+        setActiveWorkspaceId(nextWorkspaceId);
         setAuthReady(true);
       } catch {
         router.replace('/login');
@@ -113,7 +122,7 @@ function McapDashboard() {
   }, []);
 
   // ── Chime ──
-  const playChime = () => {
+  const playChime = useCallback(() => {
     try {
       const AudioContextClass = window.AudioContext
         ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -130,7 +139,7 @@ function McapDashboard() {
       };
       tone(523.25, 0, 0.12); tone(659.25, 0.14, 0.2);
     } catch { }
-  };
+  }, []);
 
   // ── Load logs whenever URL params change ──
   const loadLogs = useCallback(async () => {
@@ -156,6 +165,101 @@ function McapDashboard() {
     if (!authReady) return;
     fetchLookups().then(setLookups);
   }, [authReady]);
+
+  useEffect(() => {
+    if (!authReady || !activeWorkspaceId) return;
+
+    let closedIntentionally = false;
+
+    const connect = () => {
+      if (closedIntentionally) return;
+      setWsState(reconnectAttemptRef.current > 0 ? 'reconnecting' : 'connecting');
+      const ws = new WebSocket(getWorkspaceSocketUrl(activeWorkspaceId));
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        reconnectAttemptRef.current = 0;
+        setWsState('connected');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as WorkspaceSocketMessage;
+          if (payload.event_type === 'log.status' && payload.entity_type === 'mcap_log' && payload.entity_id) {
+            const status = payload.status as {
+              recovery_status?: string;
+              parse_status?: string;
+              gps_status?: string;
+              map_preview_status?: string;
+            } | undefined;
+            if (!status) return;
+
+            setLogs((prev) => prev.map((log) => (
+              log.id === payload.entity_id
+                ? {
+                  ...log,
+                  recovery_status: status.recovery_status ?? log.recovery_status,
+                  parse_status: status.parse_status ?? log.parse_status,
+                }
+                : log
+            )));
+
+            const isTerminal = (value?: string) => {
+              const normalized = value?.toLowerCase();
+              return normalized === 'completed' || normalized === 'success' || normalized?.startsWith('error') || normalized === 'failed';
+            };
+            if (!isTerminal(status.recovery_status) || !isTerminal(status.parse_status)) {
+              setProcessingIds((prev) => prev.includes(payload.entity_id as number) ? prev : [...prev, payload.entity_id as number]);
+            } else {
+              setProcessingIds((prev) => prev.filter((id) => id !== payload.entity_id));
+            }
+          }
+
+          if (payload.event_type === 'export.status' && payload.entity_type === 'export_job' && payload.entity_id) {
+            const nextStatus = String(payload.status ?? 'unknown');
+            const previousStatus = exportStatusRef.current[payload.entity_id];
+            exportStatusRef.current[payload.entity_id] = nextStatus;
+            if (nextStatus === 'completed' && previousStatus !== 'completed') {
+              playChime();
+              showToast(`Export job #${payload.entity_id} completed`);
+            }
+            if (nextStatus === 'failed' && previousStatus !== 'failed') {
+              showToast(`Export job #${payload.entity_id} failed`);
+            }
+          }
+        } catch {
+          // Ignore malformed payloads
+        }
+      };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (closedIntentionally) {
+          setWsState('disconnected');
+          return;
+        }
+
+        reconnectAttemptRef.current += 1;
+        const delayMs = Math.min(1000 * (2 ** Math.min(reconnectAttemptRef.current, 4)), 10000);
+        setWsState('reconnecting');
+        reconnectTimerRef.current = setTimeout(connect, delayMs);
+      };
+    };
+
+    connect();
+
+    return () => {
+      closedIntentionally = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) ws.close();
+      setWsState('disconnected');
+    };
+  }, [authReady, activeWorkspaceId, showToast, playChime]);
 
   useEffect(() => {
     const run = async () => {
@@ -328,22 +432,39 @@ function McapDashboard() {
     <div className="min-h-screen py-8 px-4 sm:px-8">
       {/* DB status indicator — only render after mount to avoid hydration mismatch */}
       {mounted && (
-        <div
-          className="fixed top-4 right-4 z-50 flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
-          style={{
-            background: 'rgba(232,224,212,0.92)',
-            border: '1px solid rgba(42,38,34,0.2)',
-            color: 'var(--sienna)',
-            backdropFilter: 'blur(4px)',
-          }}
-          title={`Database: ${dbStatus}`}
-        >
-          <span
-            className={`block h-2 w-2 rounded-full ${dbStatus === 'connected' ? 'bg-green-500' :
-              dbStatus === 'disconnected' ? 'bg-red-500' : 'bg-amber-400'
-              }`}
-          />
-          {dbStatus}
+        <div className="fixed top-4 right-4 z-50 flex flex-col items-end gap-1.5">
+          <div
+            className="flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
+            style={{
+              background: 'rgba(232,224,212,0.92)',
+              border: '1px solid rgba(42,38,34,0.2)',
+              color: 'var(--sienna)',
+              backdropFilter: 'blur(4px)',
+            }}
+            title={`Database: ${dbStatus}`}
+          >
+            <span
+              className={`block h-2 w-2 rounded-full ${dbStatus === 'connected' ? 'bg-green-500' :
+                dbStatus === 'disconnected' ? 'bg-red-500' : 'bg-amber-400'
+                }`}
+            />
+            {dbStatus}
+          </div>
+          <div
+            className="flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
+            style={{
+              background: 'rgba(232,224,212,0.92)',
+              border: '1px solid rgba(42,38,34,0.2)',
+              color: 'var(--sienna)',
+              backdropFilter: 'blur(4px)',
+            }}
+            title={`Realtime: ${wsState}`}
+          >
+            <span
+              className={`block h-2 w-2 rounded-full ${wsState === 'connected' ? 'bg-green-500' : wsState === 'reconnecting' ? 'bg-amber-400' : 'bg-red-500'}`}
+            />
+            {`realtime ${wsState}`}
+          </div>
         </div>
       )}
 

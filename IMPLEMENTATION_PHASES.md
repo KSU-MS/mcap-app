@@ -196,17 +196,17 @@ It includes:
 
 ### Status
 
-- [ ] Add websocket client util/hook
-- [ ] Resolve active workspace id from authenticated user payload
-- [ ] Connect dashboard to `/ws/workspaces/<id>/jobs/`
-- [ ] Update export/processing UI from incoming events
-- [ ] Keep polling fallback for resilience
+- [x] ~~Add websocket client util/hook~~
+- [x] ~~Resolve active workspace id from authenticated user payload~~
+- [x] ~~Connect dashboard to `/ws/workspaces/<id>/jobs/`~~
+- [x] ~~Update export/processing UI from incoming events~~
+- [x] ~~Keep polling fallback for resilience~~
 
-### Planned files
+### Files modified
 
-- [ ] `frontend/lib/mcap/ws.ts` (new)
-- [ ] `frontend/lib/mcap/api.ts` (workspace id usage as needed)
-- [ ] `frontend/app/page.tsx`
+- [x] ~~`frontend/lib/mcap/ws.ts` (new)~~
+- [x] ~~`frontend/lib/mcap/api.ts`~~
+- [x] ~~`frontend/app/page.tsx`~~
 - [ ] `frontend/components/mcap/modals/DownloadModal.tsx` (optional status details)
 
 ---
@@ -298,7 +298,11 @@ It includes:
 
 ### Following commit (recommended)
 
-- [~] In progress: commit Celery event publishing integration in task files + tests.
+- [x] ~~Commit Celery event publishing integration in task files + tests (`336f9b1`)~~
+
+### Next commit (updated)
+
+- [~] In progress: commit frontend websocket subscription integration.
 
 ---
 
@@ -308,4 +312,4 @@ It includes:
 - [x] ~~Workspace schema/scoping is live~~
 - [x] ~~Channels framework scaffolding is committed~~
 - [x] ~~Realtime task event emission wired in backend~~
-- [ ] Frontend websocket subscription not yet wired
+- [x] ~~Frontend websocket subscription wired~~

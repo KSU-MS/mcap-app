@@ -91,6 +91,8 @@ export interface AuthUser {
     email: string;
     is_staff: boolean;
     is_superuser: boolean;
+    workspace_ids?: number[];
+    default_workspace_id?: number | null;
 }
 
 export async function fetchCurrentUser(): Promise<AuthUser> {
