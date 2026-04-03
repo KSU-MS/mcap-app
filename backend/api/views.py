@@ -14,7 +14,7 @@ from .parser import Parser
 from .gpsparse import GpsParser
 from .tasks import recover_mcap_file
 from .views_export import ExportActionsMixin
-from .permissions import IsWorkspaceMember
+from .permissions import HasWorkspaceWriteAccess, IsWorkspaceMember
 from .workspace import resolve_workspace_for_request
 import os
 import hashlib
@@ -33,7 +33,7 @@ from celery.result import AsyncResult
 class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
     queryset = McapLog.objects.all()
     serializer_class = McapLogSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceMember]
+    permission_classes = [IsAuthenticated, IsWorkspaceMember, HasWorkspaceWriteAccess]
 
     @staticmethod
     def _has_workspace_field():

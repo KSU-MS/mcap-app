@@ -3,7 +3,7 @@ from typing import Optional
 from .models import Workspace, WorkspaceMember
 
 
-def resolve_workspace_for_request(request) -> Optional[Workspace]:
+def resolve_workspace_membership_for_request(request) -> Optional[WorkspaceMember]:
     if not request.user or not request.user.is_authenticated:
         return None
 
@@ -21,20 +21,24 @@ def resolve_workspace_for_request(request) -> Optional[Workspace]:
         except (TypeError, ValueError):
             return None
 
-        membership = memberships.filter(workspace_id=workspace_id_int).first()
-        return membership.workspace if membership else None
+        return memberships.filter(workspace_id=workspace_id_int).first()
 
     membership = memberships.order_by("workspace_id").first()
     if membership:
-        return membership.workspace
+        return membership
 
     default_workspace = Workspace.objects.filter(slug="team-workspace").first()
     if default_workspace:
-        WorkspaceMember.objects.get_or_create(
+        membership, _ = WorkspaceMember.objects.get_or_create(
             user=request.user,
             workspace=default_workspace,
             defaults={"role": WorkspaceMember.ROLE_VIEWER},
         )
-        return default_workspace
+        return membership
 
     return None
+
+
+def resolve_workspace_for_request(request) -> Optional[Workspace]:
+    membership = resolve_workspace_membership_for_request(request)
+    return membership.workspace if membership else None

@@ -220,17 +220,17 @@ It includes:
 
 ### Status
 
-- [ ] Enforce `viewer/editor/admin` policy on mutate endpoints
-- [ ] Deny cross-workspace access consistently with 404/403 policy
+- [x] ~~Enforce `viewer/editor/admin` policy on mutate endpoints~~
+- [x] ~~Deny cross-workspace access consistently with 404/403 policy~~
 - [ ] Remove legacy user-field fallback logic if no longer needed
 
 ### Planned files
 
-- [ ] `backend/api/permissions.py`
-- [ ] `backend/api/views.py`
-- [ ] `backend/api/views_export.py`
-- [ ] `backend/api/workspace.py`
-- [ ] `backend/api/tests.py`
+- [x] ~~`backend/api/permissions.py`~~
+- [x] ~~`backend/api/views.py`~~
+- [x] ~~`backend/api/views_export.py`~~
+- [x] ~~`backend/api/workspace.py`~~
+- [x] ~~`backend/api/tests.py`~~
 
 ---
 
@@ -266,7 +266,7 @@ It includes:
 - [x] ~~Backend auth session roundtrip test present~~
 - [x] ~~Workspace export access tests present~~
 - [ ] Add websocket consumer membership tests
-- [ ] Add Celery event emission tests
+- [x] ~~Add Celery event emission tests~~
 - [ ] Add end-to-end two-client workspace realtime smoke test
 
 ### Commands currently validated
@@ -284,6 +284,9 @@ It includes:
 
 - [x] ~~`ceccd29` — session auth backend/frontend flow~~
 - [x] ~~`4d8162e` — workspace schema + membership scoping~~
+- [x] ~~`544bccd` — channels websocket infrastructure~~
+- [x] ~~`336f9b1` — celery realtime event publishing~~
+- [x] ~~`e622034` — frontend websocket subscription~~
 
 ### Next commit (recommended)
 
@@ -302,7 +305,7 @@ It includes:
 
 ### Next commit (updated)
 
-- [~] In progress: commit frontend websocket subscription integration.
+- [~] In progress: commit role-enforcement and permission-hardening updates.
 
 ---
 
@@ -313,3 +316,4 @@ It includes:
 - [x] ~~Channels framework scaffolding is committed~~
 - [x] ~~Realtime task event emission wired in backend~~
 - [x] ~~Frontend websocket subscription wired~~
+- [~] Role enforcement is implemented; cleanup of transitional fallbacks remains

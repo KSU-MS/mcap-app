@@ -296,6 +296,12 @@ class ExportAuthAccessTests(TestCase):
         self.other_user = get_user_model().objects.create_user(
             username="bob", password="password123"
         )
+        self.viewer_user = get_user_model().objects.create_user(
+            username="viewer", password="password123"
+        )
+        self.editor_user = get_user_model().objects.create_user(
+            username="editor", password="password123"
+        )
         self.workspace = Workspace.objects.create(name="Team", slug="team")
         self.other_workspace = Workspace.objects.create(name="Other", slug="other")
         WorkspaceMember.objects.create(
@@ -305,6 +311,16 @@ class ExportAuthAccessTests(TestCase):
             user=self.other_user,
             workspace=self.other_workspace,
             role=WorkspaceMember.ROLE_VIEWER,
+        )
+        WorkspaceMember.objects.create(
+            user=self.viewer_user,
+            workspace=self.workspace,
+            role=WorkspaceMember.ROLE_VIEWER,
+        )
+        WorkspaceMember.objects.create(
+            user=self.editor_user,
+            workspace=self.workspace,
+            role=WorkspaceMember.ROLE_EDITOR,
         )
 
     def test_export_status_allows_authenticated_workspace_access(self):
@@ -384,6 +400,51 @@ class ExportAuthAccessTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+    def test_workspace_viewer_can_list_logs(self):
+        McapLog.objects.create(
+            workspace=self.workspace,
+            created_by=self.user,
+            file_name="shared.mcap",
+        )
+
+        self.client.force_authenticate(user=self.viewer_user)
+        response = self.client.get(f"/api/mcap-logs/?workspace_id={self.workspace.id}")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_workspace_viewer_cannot_update_log(self):
+        log = McapLog.objects.create(
+            workspace=self.workspace,
+            created_by=self.user,
+            file_name="shared.mcap",
+        )
+
+        self.client.force_authenticate(user=self.viewer_user)
+        response = self.client.patch(
+            f"/api/mcap-logs/{log.id}/?workspace_id={self.workspace.id}",
+            data={"notes": "viewer-edit"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_workspace_editor_can_update_log(self):
+        log = McapLog.objects.create(
+            workspace=self.workspace,
+            created_by=self.user,
+            file_name="shared.mcap",
+        )
+
+        self.client.force_authenticate(user=self.editor_user)
+        response = self.client.patch(
+            f"/api/mcap-logs/{log.id}/?workspace_id={self.workspace.id}",
+            data={"notes": "editor-edit"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["notes"], "editor-edit")
 
 
 class AuthSessionTests(TestCase):
