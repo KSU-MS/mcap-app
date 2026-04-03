@@ -13,7 +13,9 @@ from .services.contracts import ConversionRequest, ExportProgressSnapshot
 from .services.conversion_service import McapConversionService
 from .services.status_constants import is_export_terminal, is_mcap_terminal
 from .serializers import DownloadRequestSerializer, ExportCreateRequestSerializer
-from .models import ExportJob, McapLog, Workspace, WorkspaceMember
+from .models import ExportItem, ExportJob, McapLog, Workspace, WorkspaceMember
+from .jobs.tasks_export import _broadcast_export_job_status
+from .jobs.tasks_ingest import _broadcast_log_status
 from .conversion.telemetry_log import DataLog
 
 
@@ -422,3 +424,62 @@ class AuthSessionTests(TestCase):
 
         me_after_logout = self.client.get("/api/auth/me/")
         self.assertEqual(me_after_logout.status_code, 403)
+
+
+class RealtimeBroadcastTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="realtime-user", password="password123"
+        )
+        self.workspace = Workspace.objects.create(name="Realtime", slug="realtime")
+        WorkspaceMember.objects.create(
+            user=self.user,
+            workspace=self.workspace,
+            role=WorkspaceMember.ROLE_ADMIN,
+        )
+
+    @patch("api.jobs.tasks_export.broadcast_workspace_event")
+    def test_export_status_broadcast_payload(self, broadcast_mock):
+        log = McapLog.objects.create(
+            workspace=self.workspace,
+            created_by=self.user,
+            file_name="sample.mcap",
+        )
+        job = ExportJob.objects.create(
+            workspace=self.workspace,
+            created_by=self.user,
+            format="csv_omni",
+            status="processing",
+            requested_ids=[log.id],
+        )
+        ExportItem.objects.create(job=job, mcap_log=log, status="completed")
+
+        _broadcast_export_job_status(job)
+
+        broadcast_mock.assert_called_once()
+        workspace_id, payload = broadcast_mock.call_args.args
+        self.assertEqual(workspace_id, self.workspace.id)
+        self.assertEqual(payload["event_type"], "export.status")
+        self.assertEqual(payload["entity_type"], "export_job")
+        self.assertEqual(payload["entity_id"], job.id)
+
+    @patch("api.jobs.tasks_ingest.broadcast_workspace_event")
+    def test_log_status_broadcast_payload(self, broadcast_mock):
+        log = McapLog.objects.create(
+            workspace=self.workspace,
+            created_by=self.user,
+            file_name="sample.mcap",
+            recovery_status="processing",
+            parse_status="pending",
+            gps_status="pending",
+            map_preview_status="pending",
+        )
+
+        _broadcast_log_status(log)
+
+        broadcast_mock.assert_called_once()
+        workspace_id, payload = broadcast_mock.call_args.args
+        self.assertEqual(workspace_id, self.workspace.id)
+        self.assertEqual(payload["event_type"], "log.status")
+        self.assertEqual(payload["entity_type"], "mcap_log")
+        self.assertEqual(payload["entity_id"], log.id)

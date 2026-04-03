@@ -140,7 +140,7 @@ It includes:
 ### Notes
 
 - These changes are implemented in working tree and validated locally.
-- They should be committed as the next backend commit.
+- [x] ~~Committed as backend infrastructure commit (`544bccd`)~~
 
 ---
 
@@ -153,18 +153,18 @@ It includes:
 
 ### Status
 
-- [ ] Add export lifecycle broadcasts in Celery tasks
-- [ ] Add ingest/parse lifecycle broadcasts in Celery tasks
-- [ ] Standardize event payload schema
-- [ ] Add task-level tests for event emission
+- [x] ~~Add export lifecycle broadcasts in Celery tasks~~
+- [x] ~~Add ingest/parse lifecycle broadcasts in Celery tasks~~
+- [x] ~~Standardize event payload schema~~
+- [x] ~~Add task-level tests for event emission~~
 
-### Planned files
+### Files modified
 
-- [ ] `backend/api/jobs/tasks_export.py`
-- [ ] `backend/api/jobs/tasks_ingest.py`
+- [x] ~~`backend/api/jobs/tasks_export.py`~~
+- [x] ~~`backend/api/jobs/tasks_ingest.py`~~
 - [ ] `backend/api/jobs/tasks_status.py` (optional if centralized)
-- [ ] `backend/api/realtime.py` (payload helpers, if expanded)
-- [ ] `backend/api/tests.py` (or split tests file)
+- [x] ~~`backend/api/realtime.py`~~
+- [x] ~~`backend/api/tests.py`~~
 
 ### Planned event payload contract
 
@@ -287,18 +287,18 @@ It includes:
 
 ### Next commit (recommended)
 
-- [ ] Commit Channels infrastructure files:
-  - `pyproject.toml`
-  - `uv.lock`
-  - `backend/backend/settings.py`
-  - `backend/backend/asgi.py`
-  - `backend/api/routing.py`
-  - `backend/api/consumers.py`
-  - `backend/api/realtime.py`
+- [x] ~~Commit Channels infrastructure files:~~
+  - [x] ~~`pyproject.toml`~~
+  - [x] ~~`uv.lock`~~
+  - [x] ~~`backend/backend/settings.py`~~
+  - [x] ~~`backend/backend/asgi.py`~~
+  - [x] ~~`backend/api/routing.py`~~
+  - [x] ~~`backend/api/consumers.py`~~
+  - [x] ~~`backend/api/realtime.py`~~
 
 ### Following commit (recommended)
 
-- [ ] Commit Celery event publishing integration in task files + tests.
+- [~] In progress: commit Celery event publishing integration in task files + tests.
 
 ---
 
@@ -306,6 +306,6 @@ It includes:
 
 - [x] ~~Session auth is live~~
 - [x] ~~Workspace schema/scoping is live~~
-- [x] ~~Channels framework scaffolding is implemented in working tree~~
-- [ ] Realtime task event emission not yet wired
+- [x] ~~Channels framework scaffolding is committed~~
+- [x] ~~Realtime task event emission wired in backend~~
 - [ ] Frontend websocket subscription not yet wired

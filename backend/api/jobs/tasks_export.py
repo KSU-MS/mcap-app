@@ -7,10 +7,39 @@ from django.conf import settings
 from django.utils import timezone
 
 from ..models import ExportItem, ExportJob, McapLog
+from ..realtime import broadcast_workspace_event
 from ..services.contracts import ConversionRequest
 from ..services.conversion_service import McapConversionService
 from .common import resolve_source_file_for_log
 from .tasks_status import cache_export_status
+
+
+def _broadcast_export_job_status(job: ExportJob):
+    if not job.workspace_id:
+        return
+    total_items = job.items.count()
+    completed_items = job.items.filter(status="completed").count()
+    failed_items = job.items.filter(status="failed").count()
+    progress = (
+        int((completed_items + failed_items) / total_items * 100) if total_items else 0
+    )
+    broadcast_workspace_event(
+        job.workspace_id,
+        {
+            "event_type": "export.status",
+            "workspace_id": job.workspace_id,
+            "entity_type": "export_job",
+            "entity_id": job.id,
+            "status": job.status,
+            "progress_percent": progress,
+            "updated_at": timezone.now().isoformat(),
+            "meta": {
+                "total_items": total_items,
+                "completed_items": completed_items,
+                "failed_items": failed_items,
+            },
+        },
+    )
 
 
 @shared_task(name="api.tasks.convert_export_item", bind=True, max_retries=2)
@@ -24,6 +53,7 @@ def convert_export_item(self, export_item_id):
         item.error_message = None
         item.save(update_fields=["status", "attempts", "error_message", "updated_at"])
         cache_export_status(item.job_id)
+        _broadcast_export_job_status(item.job)
 
         mcap_log = item.mcap_log
         source_path = resolve_source_file_for_log(mcap_log)
@@ -62,6 +92,7 @@ def convert_export_item(self, export_item_id):
         item.status = "completed"
         item.save(update_fields=["output_uri", "status", "updated_at"])
         cache_export_status(item.job_id)
+        _broadcast_export_job_status(item.job)
         return {"item_id": export_item_id, "status": "completed"}
     except ExportItem.DoesNotExist:
         return {"item_id": export_item_id, "status": "missing"}
@@ -72,6 +103,7 @@ def convert_export_item(self, export_item_id):
             item.error_message = str(e)
             item.save(update_fields=["status", "error_message", "updated_at"])
             cache_export_status(item.job_id)
+            _broadcast_export_job_status(item.job)
         except Exception:
             pass
         if self.request.retries < self.max_retries:
@@ -95,6 +127,7 @@ def finalize_export_job(self, results, export_job_id):
                 update_fields=["status", "error_message", "completed_at", "updated_at"]
             )
             cache_export_status(job.id)
+            _broadcast_export_job_status(job)
             return f"Export job {export_job_id} failed"
 
         export_dir = Path(settings.MEDIA_ROOT) / "exports" / str(job.id)
@@ -130,6 +163,7 @@ def finalize_export_job(self, results, export_job_id):
             ]
         )
         cache_export_status(job.id)
+        _broadcast_export_job_status(job)
         return f"Export job {export_job_id} finalized"
     except ExportJob.DoesNotExist:
         return f"ExportJob with id {export_job_id} does not exist"
@@ -143,6 +177,7 @@ def finalize_export_job(self, results, export_job_id):
                 update_fields=["status", "error_message", "completed_at", "updated_at"]
             )
             cache_export_status(job.id)
+            _broadcast_export_job_status(job)
         except Exception:
             pass
         if self.request.retries < self.max_retries:
@@ -161,11 +196,13 @@ def enqueue_export_job(export_job_id):
             update_fields=["status", "error_message", "completed_at", "updated_at"]
         )
         cache_export_status(job.id)
+        _broadcast_export_job_status(job)
         return
 
     job.status = "processing"
     job.save(update_fields=["status", "updated_at"])
     cache_export_status(job.id)
+    _broadcast_export_job_status(job)
     header = [convert_export_item.s(item_id) for item_id in item_ids]
     callback = finalize_export_job.s(export_job_id)
     chord(header)(callback)

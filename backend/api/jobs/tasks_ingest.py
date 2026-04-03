@@ -14,6 +14,7 @@ from ..gpsparse import GpsParser
 from ..map_preview import generate_map_preview_svg
 from ..models import McapLog
 from ..parser import Parser
+from ..realtime import broadcast_workspace_event
 from .common import (
     is_non_retryable_recover_error,
     resolve_original_file_for_log,
@@ -21,6 +22,27 @@ from .common import (
     task_path_value,
 )
 from .tasks_status import cache_mcap_status
+
+
+def _broadcast_log_status(mcap_log: McapLog):
+    if not mcap_log.workspace_id:
+        return
+    broadcast_workspace_event(
+        mcap_log.workspace_id,
+        {
+            "event_type": "log.status",
+            "workspace_id": mcap_log.workspace_id,
+            "entity_type": "mcap_log",
+            "entity_id": mcap_log.id,
+            "status": {
+                "recovery_status": mcap_log.recovery_status,
+                "parse_status": mcap_log.parse_status,
+                "gps_status": mcap_log.gps_status,
+                "map_preview_status": mcap_log.map_preview_status,
+            },
+            "updated_at": timezone.now().isoformat(),
+        },
+    )
 
 
 def reenqueue_incomplete_mcap_logs() -> dict[str, int]:
@@ -94,6 +116,7 @@ def recover_mcap_file(self, mcap_log_id, file_path):
         mcap_log.recovery_status = "processing"
         mcap_log.save(update_fields=["recovery_status"])
         cache_mcap_status(mcap_log.id, mcap_log.recovery_status, mcap_log.parse_status)
+        _broadcast_log_status(mcap_log)
 
         mcap_cmd = shutil.which("mcap")
         if not mcap_cmd:
@@ -145,6 +168,7 @@ def recover_mcap_file(self, mcap_log_id, file_path):
         mcap_log.recovery_status = "completed"
         mcap_log.save(update_fields=["recovered_uri", "recovery_status"])
         cache_mcap_status(mcap_log.id, mcap_log.recovery_status, mcap_log.parse_status)
+        _broadcast_log_status(mcap_log)
 
         print(
             f"[recover_mcap_file] Successfully recovered MCAP file: {recovered_file_path}"
@@ -163,6 +187,7 @@ def recover_mcap_file(self, mcap_log_id, file_path):
             cache_mcap_status(
                 mcap_log.id, mcap_log.recovery_status, mcap_log.parse_status
             )
+            _broadcast_log_status(mcap_log)
         except Exception:
             pass
         return f"Recovery timed out for log {mcap_log_id}"
@@ -174,6 +199,7 @@ def recover_mcap_file(self, mcap_log_id, file_path):
             cache_mcap_status(
                 mcap_log.id, mcap_log.recovery_status, mcap_log.parse_status
             )
+            _broadcast_log_status(mcap_log)
         except Exception:
             pass
 
@@ -197,6 +223,7 @@ def parse_mcap_file(self, mcap_log_id, file_path):
         mcap_log.parse_status = "processing"
         mcap_log.save(update_fields=["parse_status"])
         cache_mcap_status(mcap_log.id, mcap_log.recovery_status, mcap_log.parse_status)
+        _broadcast_log_status(mcap_log)
 
         parsed_data = Parser.parse_stuff(str(source_path))
         mcap_log.channels = parsed_data.get("channels", [])
@@ -215,6 +242,7 @@ def parse_mcap_file(self, mcap_log_id, file_path):
         mcap_log.map_preview_error = None
         mcap_log.save()
         cache_mcap_status(mcap_log.id, mcap_log.recovery_status, mcap_log.parse_status)
+        _broadcast_log_status(mcap_log)
 
         extract_gps_path.delay(mcap_log_id, str(source_path))
         return f"Successfully parsed metadata for log {mcap_log_id}"
@@ -233,6 +261,7 @@ def parse_mcap_file(self, mcap_log_id, file_path):
             cache_mcap_status(
                 mcap_log.id, mcap_log.recovery_status, mcap_log.parse_status
             )
+            _broadcast_log_status(mcap_log)
         except Exception:
             pass
 
@@ -255,6 +284,7 @@ def extract_gps_path(self, mcap_log_id, file_path):
         mcap_log.gps_status = "processing"
         mcap_log.gps_error = None
         mcap_log.save(update_fields=["gps_status", "gps_error"])
+        _broadcast_log_status(mcap_log)
 
         gps_data = GpsParser.parse_gps(str(source_path))
         all_coordinates = gps_data.get("all_coordinates", [])
@@ -266,6 +296,7 @@ def extract_gps_path(self, mcap_log_id, file_path):
             mcap_log.save(
                 update_fields=["lap_path", "gps_status", "map_preview_status"]
             )
+            _broadcast_log_status(mcap_log)
             generate_map_preview.delay(mcap_log_id)
             return f"Extracted GPS path for log {mcap_log_id}"
 
@@ -281,6 +312,7 @@ def extract_gps_path(self, mcap_log_id, file_path):
                 "map_preview_status",
             ]
         )
+        _broadcast_log_status(mcap_log)
         return f"No GPS path available for log {mcap_log_id}"
     except McapLog.DoesNotExist:
         return f"McapLog with id {mcap_log_id} does not exist"
@@ -293,6 +325,7 @@ def extract_gps_path(self, mcap_log_id, file_path):
             mcap_log.save(
                 update_fields=["gps_status", "gps_error", "map_preview_status"]
             )
+            _broadcast_log_status(mcap_log)
         except Exception:
             pass
         if self.request.retries < self.max_retries:
@@ -307,15 +340,18 @@ def generate_map_preview(self, mcap_log_id):
         mcap_log.map_preview_status = "processing"
         mcap_log.map_preview_error = None
         mcap_log.save(update_fields=["map_preview_status", "map_preview_error"])
+        _broadcast_log_status(mcap_log)
 
         if mcap_log.map_preview_uri:
             mcap_log.map_preview_status = "completed"
             mcap_log.save(update_fields=["map_preview_status"])
+            _broadcast_log_status(mcap_log)
             return f"Map preview already exists for log {mcap_log_id}"
 
         if not mcap_log.lap_path:
             mcap_log.map_preview_status = "skipped"
             mcap_log.save(update_fields=["map_preview_status"])
+            _broadcast_log_status(mcap_log)
             return f"No lap_path available for log {mcap_log_id}"
 
         coords = []
@@ -333,6 +369,7 @@ def generate_map_preview(self, mcap_log_id):
         mcap_log.map_preview_uri = uri
         mcap_log.map_preview_status = "completed"
         mcap_log.save(update_fields=["map_preview_uri", "map_preview_status"])
+        _broadcast_log_status(mcap_log)
         return f"Generated map preview for log {mcap_log_id}"
 
     except McapLog.DoesNotExist:
@@ -343,6 +380,7 @@ def generate_map_preview(self, mcap_log_id):
             mcap_log.map_preview_status = "failed"
             mcap_log.map_preview_error = str(e)
             mcap_log.save(update_fields=["map_preview_status", "map_preview_error"])
+            _broadcast_log_status(mcap_log)
         except Exception:
             pass
         if self.request.retries < self.max_retries:
