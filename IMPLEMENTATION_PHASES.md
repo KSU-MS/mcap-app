@@ -265,7 +265,7 @@ It includes:
 
 - [x] ~~Backend auth session roundtrip test present~~
 - [x] ~~Workspace export access tests present~~
-- [ ] Add websocket consumer membership tests
+- [x] ~~Add websocket consumer membership tests~~
 - [x] ~~Add Celery event emission tests~~
 - [ ] Add end-to-end two-client workspace realtime smoke test
 

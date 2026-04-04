@@ -5,6 +5,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from asgiref.sync import async_to_sync
+from django.contrib.auth.models import AnonymousUser
 from rest_framework.test import APIClient
 
 from .conversion.ld_writer import write_ld_file
@@ -16,6 +18,7 @@ from .serializers import DownloadRequestSerializer, ExportCreateRequestSerialize
 from .models import ExportItem, ExportJob, McapLog, Workspace, WorkspaceMember
 from .jobs.tasks_export import _broadcast_export_job_status
 from .jobs.tasks_ingest import _broadcast_log_status
+from .consumers import WorkspaceJobsConsumer
 from .conversion.telemetry_log import DataLog
 
 
@@ -544,3 +547,102 @@ class RealtimeBroadcastTests(TestCase):
         self.assertEqual(payload["event_type"], "log.status")
         self.assertEqual(payload["entity_type"], "mcap_log")
         self.assertEqual(payload["entity_id"], log.id)
+
+
+class WorkspaceConsumerTests(TestCase):
+    class _DummyChannelLayer:
+        def __init__(self):
+            self.group_add_calls = []
+            self.group_discard_calls = []
+
+        async def group_add(self, group_name, channel_name):
+            self.group_add_calls.append((group_name, channel_name))
+
+        async def group_discard(self, group_name, channel_name):
+            self.group_discard_calls.append((group_name, channel_name))
+
+    class _TestWorkspaceJobsConsumer(WorkspaceJobsConsumer):
+        def __init__(self):
+            super().__init__()
+            self.accepted = False
+            self.closed_code = None
+            self.sent_payloads = []
+            self.channel_name = "test-channel"
+
+        async def accept(self):
+            self.accepted = True
+
+        async def close(self, code=None):
+            self.closed_code = code
+
+        async def send_json(self, content, close=False):
+            self.sent_payloads.append(content)
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="ws-user",
+            password="password123",
+        )
+        self.workspace = Workspace.objects.create(name="WS Team", slug="ws-team")
+        WorkspaceMember.objects.create(
+            user=self.user,
+            workspace=self.workspace,
+            role=WorkspaceMember.ROLE_VIEWER,
+        )
+
+    def _build_consumer(self, user, workspace_id):
+        consumer = self._TestWorkspaceJobsConsumer()
+        consumer.channel_layer = self._DummyChannelLayer()
+        consumer.scope = {
+            "user": user,
+            "url_route": {"kwargs": {"workspace_id": str(workspace_id)}},
+        }
+        return consumer
+
+    def test_consumer_rejects_anonymous_user(self):
+        consumer = self._build_consumer(AnonymousUser(), self.workspace.id)
+
+        async_to_sync(consumer.connect)()
+
+        self.assertFalse(consumer.accepted)
+        self.assertEqual(consumer.closed_code, 4401)
+
+    def test_consumer_rejects_invalid_workspace_id(self):
+        consumer = self._build_consumer(self.user, "bad")
+
+        async_to_sync(consumer.connect)()
+
+        self.assertFalse(consumer.accepted)
+        self.assertEqual(consumer.closed_code, 4400)
+
+    def test_consumer_rejects_non_member(self):
+        other_workspace = Workspace.objects.create(name="Other", slug="ws-other")
+        consumer = self._build_consumer(self.user, other_workspace.id)
+
+        async_to_sync(consumer.connect)()
+
+        self.assertFalse(consumer.accepted)
+        self.assertEqual(consumer.closed_code, 4403)
+
+    def test_consumer_accepts_member_and_sends_ready_event(self):
+        consumer = self._build_consumer(self.user, self.workspace.id)
+
+        async_to_sync(consumer.connect)()
+
+        self.assertTrue(consumer.accepted)
+        self.assertIsNone(consumer.closed_code)
+        self.assertEqual(
+            consumer.channel_layer.group_add_calls,
+            [(f"workspace_{self.workspace.id}", "test-channel")],
+        )
+        self.assertEqual(len(consumer.sent_payloads), 1)
+        self.assertEqual(consumer.sent_payloads[0]["event_type"], "connection.ready")
+
+    def test_workspace_event_forwards_payload(self):
+        consumer = self._build_consumer(self.user, self.workspace.id)
+
+        async_to_sync(consumer.workspace_event)(
+            {"payload": {"event_type": "export.status"}}
+        )
+
+        self.assertEqual(consumer.sent_payloads, [{"event_type": "export.status"}])
