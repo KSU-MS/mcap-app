@@ -287,6 +287,8 @@ It includes:
 - [x] ~~`544bccd` — channels websocket infrastructure~~
 - [x] ~~`336f9b1` — celery realtime event publishing~~
 - [x] ~~`e622034` — frontend websocket subscription~~
+- [x] ~~`25791ac` — workspace role write-permission enforcement~~
+- [x] ~~`5c49b67` — websocket consumer membership test coverage~~
 
 ### Next commit (recommended)
 
@@ -305,7 +307,15 @@ It includes:
 
 ### Next commit (updated)
 
-- [~] In progress: commit role-enforcement and permission-hardening updates.
+- [x] ~~Commit role-enforcement and permission-hardening updates (`25791ac`)~~
+
+### Final commit in phase
+
+- [x] ~~Commit websocket consumer membership tests (`5c49b67`)~~
+
+### Phase status
+
+- [x] ~~Phase 9 complete: commit plan executed and pushed to `origin/main`~~
 
 ---
 
