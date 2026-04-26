@@ -75,7 +75,6 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "drf_yasg",  # Swagger/OpenAPI documentation
-    "channels",
     "api",
 ]
 
@@ -246,36 +245,17 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 10,  # Number of items per page
 }
 
-# Celery Configuration
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
-
-CHANNEL_REDIS_URL = env("CHANNEL_REDIS_URL", default=CELERY_BROKER_URL)
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [CHANNEL_REDIS_URL],
-        },
-    }
-}
-
-# Celery task settings
-CELERY_ACCEPT_CONTENT = ["json"]
-CELERY_TASK_SERIALIZER = "json"
-
 # Map preview generation
 MAP_PREVIEW_TILE_URL_TEMPLATE = os.environ.get(
     "MAP_PREVIEW_TILE_URL_TEMPLATE", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 )
-CELERY_RESULT_SERIALIZER = "json"
-CELERY_TIMEZONE = TIME_ZONE
-
-# Task execution settings
-CELERY_TASK_TRACK_STARTED = True
-CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
-CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutes
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # Conversion defaults
 MOTEC_RESAMPLE_HZ_DEFAULT = float(os.environ.get("MOTEC_RESAMPLE_HZ_DEFAULT", "20.0"))
+
+# MCAP fanout engine
+MCAP_FANOUT_ENGINE = os.environ.get("MCAP_FANOUT_ENGINE", "go")
+MCAP_FANOUT_GO_CMD = os.environ.get(
+    "MCAP_FANOUT_GO_CMD", "go run ./go_worker/cmd/mcap_fanout_worker"
+)
+MCAP_FANOUT_TIMEOUT_SECONDS = int(os.environ.get("MCAP_FANOUT_TIMEOUT_SECONDS", "600"))

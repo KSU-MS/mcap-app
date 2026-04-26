@@ -3,6 +3,7 @@ import type {
     PaginatedResponse,
     LogFilters,
     DownloadFormat,
+    ExportJob,
     GeoJsonFeatureCollection,
 } from './types';
 
@@ -13,9 +14,20 @@ export const API_BASE_URL = (configuredApiBaseUrl && configuredApiBaseUrl.length
     : '/api'
 ).replace(/\/+$/, '');
 
+const API_ORIGIN = (() => {
+    try {
+        return new URL(API_BASE_URL).origin;
+    } catch {
+        return '';
+    }
+})();
+
 function withApiBase(path?: string): string | undefined {
     if (!path) return undefined;
     if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    if (path.startsWith('/media/')) {
+        return API_ORIGIN ? `${API_ORIGIN}${path}` : path;
+    }
     if (path.startsWith('/')) return `${API_BASE_URL}${path}`;
     return `${API_BASE_URL}/${path}`;
 }
@@ -259,6 +271,63 @@ export async function bulkDownload(ids: number[], format: DownloadFormat, resamp
     const a = document.createElement('a');
     a.href = url;
     a.download = `mcap_logs_${format}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+}
+
+export async function createExportJob(
+    ids: number[],
+    format: Exclude<DownloadFormat, 'mcap'>,
+    resampleHz?: number,
+): Promise<ExportJob> {
+    const payload: { ids: number[]; format: Exclude<DownloadFormat, 'mcap'>; resample_hz?: number } = {
+        ids,
+        format,
+    };
+    if (typeof resampleHz === 'number') {
+        payload.resample_hz = resampleHz;
+    }
+
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/exports/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+        throw new Error(await getErrorMessage(res, `Failed to start export job: ${res.statusText}`));
+    }
+    return res.json();
+}
+
+export async function fetchActiveExportJobs(): Promise<ExportJob[]> {
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/exports/active/`);
+    if (!res.ok) {
+        throw new Error(await getErrorMessage(res, `Failed to fetch active exports: ${res.statusText}`));
+    }
+    return res.json();
+}
+
+export async function downloadExportJob(jobId: number): Promise<void> {
+    const res = await apiFetch(`${API_BASE_URL}/mcap-logs/exports/${jobId}/download/`);
+    if (!res.ok) {
+        throw new Error(await getErrorMessage(res, `Failed to download export job #${jobId}: ${res.statusText}`));
+    }
+
+    const contentDisposition = res.headers.get('Content-Disposition');
+    let filename = `export_job_${jobId}.zip`;
+    if (contentDisposition) {
+        const m = contentDisposition.match(/filename="?([^";]+)"?/i);
+        if (m?.[1]) filename = m[1];
+    }
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);

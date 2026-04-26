@@ -10,7 +10,7 @@ from rest_framework.response import Response
 
 from .models import ExportItem, ExportJob, McapLog
 from .serializers import ExportCreateRequestSerializer, ExportJobSerializer
-from .tasks import enqueue_export_job
+from .services.background_jobs import enqueue_export_job
 from .workspace import resolve_workspace_for_request
 
 

@@ -1,7 +1,7 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from .models import McapLog
+from .models import BackgroundJob, McapLog
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -12,12 +12,11 @@ from .serializers import (
 )
 from .parser import Parser
 from .gpsparse import GpsParser
-from .tasks import recover_mcap_file
+from .services.background_jobs import enqueue_ingest_job
 from .views_export import ExportActionsMixin
 from .permissions import HasWorkspaceWriteAccess, IsWorkspaceMember
 from .workspace import resolve_workspace_for_request
 import os
-import hashlib
 import datetime
 import zipfile
 import tempfile
@@ -27,7 +26,6 @@ from django.utils import timezone
 from django.contrib.gis.geos import LineString
 from django.conf import settings
 from django.db.models import Q
-from celery.result import AsyncResult
 
 
 class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
@@ -42,12 +40,6 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
     @staticmethod
     def _has_created_by_field():
         return any(field.name == "created_by" for field in McapLog._meta.get_fields())
-
-    @staticmethod
-    def _has_content_sha_field():
-        return any(
-            field.name == "content_sha256" for field in McapLog._meta.get_fields()
-        )
 
     def _visible_logs_queryset(self, request):
         workspace = getattr(self, "workspace", None) or resolve_workspace_for_request(
@@ -214,14 +206,6 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
             kwargs["created_by"] = self.request.user
         serializer.save(**kwargs)
 
-    def _find_duplicate_log(self, request, content_sha256: str):
-        if not self._has_content_sha_field():
-            return None
-        queryset = self._visible_logs_queryset(request).filter(
-            content_sha256=content_sha256
-        )
-        return queryset.order_by("-created_at").first()
-
     def list(self, request, *args, **kwargs):
         """
         List MCAP logs with optional filtering.
@@ -243,8 +227,6 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         # Handle file upload
         uploaded_file = request.FILES.get("file")
         saved_file_relpath = None
-        content_sha256 = None
-        file_path = None
 
         if uploaded_file:
             # Create media directory if it doesn't exist
@@ -255,27 +237,13 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             file_name = f"{timestamp}_{uploaded_file.name}"
             file_path = media_dir / file_name
-            hasher = hashlib.sha256()
 
             # Save the uploaded file
             with open(file_path, "wb+") as destination:
                 for chunk in uploaded_file.chunks():
                     destination.write(chunk)
-                    hasher.update(chunk)
-            content_sha256 = hasher.hexdigest()
 
-            duplicate = self._find_duplicate_log(request, content_sha256)
-            if duplicate is not None:
-                try:
-                    file_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                duplicate_data = self.get_serializer(duplicate).data
-                duplicate_data["deduplicated"] = True
-                duplicate_data["duplicate_of"] = duplicate.id
-                return Response(duplicate_data, status=status.HTTP_200_OK)
-
-            # Store relative path so Celery workers (possibly in Docker) can resolve via MEDIA_ROOT
+            # Store relative path so background workers can resolve via MEDIA_ROOT
             saved_file_relpath = str(file_path.relative_to(settings.MEDIA_ROOT))
 
             # Calculate and store file size
@@ -297,7 +265,6 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
             serializer.validated_data["parse_status"] = "pending"
             serializer.validated_data["gps_status"] = "pending"
             serializer.validated_data["map_preview_status"] = "pending"
-            serializer.validated_data["content_sha256"] = content_sha256
         else:
             # If no file uploaded, ensure file_name is set if provided in request
             if (
@@ -317,11 +284,9 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         # If a file was uploaded, trigger recovery (which will trigger parsing when done)
         if saved_file_relpath:
             # Recovery task will trigger parsing automatically when it completes
-            recovery_task = recover_mcap_file.delay(
-                mcap_log_instance.id, saved_file_relpath
-            )
-            # Store the recovery task ID for status tracking
-            mcap_log_instance.parse_task_id = recovery_task.id
+            recovery_job = enqueue_ingest_job(mcap_log_instance.id, saved_file_relpath)
+            # Store background job ID for status tracking
+            mcap_log_instance.parse_task_id = str(recovery_job.id)
             mcap_log_instance.save(update_fields=["parse_task_id"])
 
         headers = self.get_success_headers(serializer.data)
@@ -446,17 +411,13 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
         """
         Download selected MCAP log files as a ZIP archive.
         Accepts a POST request with a list of log IDs and optional format in the request body.
-        Example: {"ids": [1, 2, 3], "format": "csv_omni", "resample_hz": 50}
-        Formats: "mcap" (default, original files), "csv_omni", "csv_tvn", "ld"
+        Example: {"ids": [1, 2, 3], "format": "mcap"}
+        Formats: "mcap" (default, original files)
         """
         serializer = DownloadRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         log_ids = serializer.validated_data["ids"]
-        output_format = serializer.validated_data.get("format", "mcap")
-        resample_hz = serializer.validated_data.get(
-            "resample_hz", settings.MOTEC_RESAMPLE_HZ_DEFAULT
-        )
 
         # Get the McapLog objects
         mcap_logs = self._visible_logs_queryset(request).filter(id__in=log_ids)
@@ -478,230 +439,8 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Handle CSV/LD conversion
-        if output_format.startswith("csv_") or output_format == "ld":
-            print(
-                f"[download] CSV/LD conversion requested: ids={log_ids}, count={len(mcap_logs)}, format={output_format}, resample_hz={resample_hz}"
-            )
-            return self._download_as_converted(mcap_logs, output_format, resample_hz)
-
         # Handle MCAP download (original behavior)
         return self._download_as_mcap(mcap_logs)
-
-    def _download_as_converted(self, mcap_logs, format, resample_hz=None):
-        """
-        Convert MCAP files to CSV/LD and download as ZIP.
-        Uses synchronous conversion (can be switched to async Celery if needed).
-        """
-        from .conversion.mcap_converter import McapToCsvConverter
-        from django.conf import settings
-        import datetime
-
-        print(
-            f"[download] CSV conversion started: format={format}, count={len(mcap_logs)}, resample_hz={resample_hz}"
-        )
-        conversion_results = {}
-        conversion_errors = []
-
-        # Process conversions synchronously
-        for mcap_log in mcap_logs:
-            try:
-                print(f"[download] log id={mcap_log.id} file_name={mcap_log.file_name}")
-                # Determine source file path
-                file_path = None
-
-                # Try recovered_uri first if available and not pending
-                if mcap_log.recovered_uri and mcap_log.recovered_uri != "pending":
-                    if mcap_log.recovered_uri.startswith(settings.MEDIA_URL):
-                        file_name = mcap_log.recovered_uri.replace(
-                            settings.MEDIA_URL, "", 1
-                        )
-                        file_path = Path(settings.MEDIA_ROOT) / file_name
-                    elif mcap_log.recovered_uri.startswith("/"):
-                        file_path = Path(mcap_log.recovered_uri)
-                    else:
-                        file_path = Path(settings.MEDIA_ROOT) / mcap_log.recovered_uri
-
-                # Fall back to original_uri if recovered_uri not available
-                if not file_path or not file_path.exists():
-                    if mcap_log.original_uri:
-                        if mcap_log.original_uri.startswith(settings.MEDIA_URL):
-                            file_name = mcap_log.original_uri.replace(
-                                settings.MEDIA_URL, "", 1
-                            )
-                            file_path = Path(settings.MEDIA_ROOT) / file_name
-                        elif mcap_log.original_uri.startswith("/"):
-                            file_path = Path(mcap_log.original_uri)
-                        else:
-                            file_path = (
-                                Path(settings.MEDIA_ROOT) / mcap_log.original_uri
-                            )
-
-                if not file_path or not file_path.exists():
-                    conversion_errors.append(
-                        f"{mcap_log.file_name} (ID: {mcap_log.id}) - MCAP file not found"
-                    )
-                    print(
-                        f"[download] log id={mcap_log.id} skipped: MCAP file not found"
-                    )
-                    continue
-
-                file_path = file_path.resolve()
-                print(
-                    f"[download] log id={mcap_log.id} resolved path={file_path}, starting conversion"
-                )
-
-                # Create output directory for converted files
-                converted_dir = Path(settings.MEDIA_ROOT) / "converted"
-                converted_dir.mkdir(parents=True, exist_ok=True)
-
-                # Generate output filename
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                format_suffix = (
-                    format.replace("csv_", "") if format.startswith("csv_") else format
-                )
-                file_extension = "ld" if format_suffix == "ld" else "csv"
-                output_filename = (
-                    f"{mcap_log.id}_{format_suffix}_{timestamp}.{file_extension}"
-                )
-                output_path = converted_dir / output_filename
-
-                # Convert MCAP to CSV/LD synchronously
-                converter = McapToCsvConverter()
-                converter.convert_to_csv(
-                    str(file_path),
-                    str(output_path),
-                    format=format_suffix,
-                    resample_hz=resample_hz,
-                )
-
-                # Return the path relative to MEDIA_ROOT
-                relative_path = output_path.relative_to(settings.MEDIA_ROOT)
-                conversion_results[mcap_log] = str(relative_path)
-                print(
-                    f"[download] log id={mcap_log.id} converted successfully -> {output_path}"
-                )
-
-            except Exception as e:
-                conversion_errors.append(
-                    f"{mcap_log.file_name} (ID: {mcap_log.id}) - conversion error: {str(e)}"
-                )
-                print(f"[download] log id={mcap_log.id} conversion error: {e}")
-
-        print(
-            f"[download] conversions done: succeeded={len(conversion_results)}, failed={len(conversion_errors)}"
-        )
-        if not conversion_results:
-            return Response(
-                {
-                    "error": "No files could be converted",
-                    "conversion_errors": conversion_errors,
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        # Create ZIP file with converted CSV files
-        print("[download] creating ZIP archive")
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-        temp_file_path = temp_file.name
-        temp_file.close()
-
-        files_added = 0
-        files_missing = []
-
-        try:
-            with zipfile.ZipFile(temp_file_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                for mcap_log, converted_relative_path in conversion_results.items():
-                    try:
-                        converted_path = (
-                            Path(settings.MEDIA_ROOT) / converted_relative_path
-                        )
-
-                        if not converted_path.exists():
-                            files_missing.append(
-                                f"{mcap_log.file_name} (ID: {mcap_log.id}) - converted file not found at {converted_path}"
-                            )
-                            continue
-
-                        # Generate output filename based on format
-                        base_name = Path(mcap_log.file_name).stem
-                        format_suffix = (
-                            format.replace("csv_", "")
-                            if format.startswith("csv_")
-                            else format
-                        )
-                        file_extension = "ld" if format_suffix == "ld" else "csv"
-                        output_filename = (
-                            f"{base_name}_{format_suffix}.{file_extension}"
-                        )
-
-                        zip_file.write(str(converted_path), arcname=output_filename)
-                        files_added += 1
-                    except Exception as file_error:
-                        files_missing.append(
-                            f"{mcap_log.file_name} (ID: {mcap_log.id}) - error: {str(file_error)}"
-                        )
-                        continue
-
-            print(f"[download] ZIP written: files_added={files_added}")
-            if files_added == 0:
-                os.unlink(temp_file_path)
-                return Response(
-                    {
-                        "error": "No converted files could be added to ZIP",
-                        "missing_files": files_missing,
-                        "conversion_errors": conversion_errors,
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Generate download filename
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            format_display = (
-                format.replace("csv_", "") if format.startswith("csv_") else format
-            )
-            zip_filename = f"mcap_logs_{format_display}_{timestamp}.zip"
-
-            # Read ZIP content
-            with open(temp_file_path, "rb") as zip_file:
-                zip_content = zip_file.read()
-
-            os.unlink(temp_file_path)
-
-            print(
-                f"[download] sending response: filename={zip_filename}, size={len(zip_content)} bytes"
-            )
-            # Create response
-            response = HttpResponse(zip_content, content_type="application/zip")
-            response["Content-Disposition"] = f'attachment; filename="{zip_filename}"'
-            response["Content-Length"] = len(zip_content)
-
-            if files_missing or conversion_errors:
-                error_info = []
-                if files_missing:
-                    error_info.extend(files_missing)
-                if conversion_errors:
-                    error_info.extend(conversion_errors)
-                response["X-Missing-Files"] = ", ".join(error_info)
-
-            return response
-
-        except Exception as e:
-            if "temp_file_path" in locals() and os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except Exception:
-                    pass
-
-            import traceback
-
-            error_details = traceback.format_exc()
-            print(f"CSV download error: {str(e)}\n{error_details}")
-
-            return Response(
-                {"error": f"Failed to create {format.upper()} ZIP archive: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
 
     def _download_as_mcap(self, mcap_logs):
         """
@@ -826,7 +565,7 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
     def job_status(self, request, pk=None):
         """
         Get the parsing job status for a specific MCAP log.
-        Returns both the database parse_status and Celery task status.
+        Returns both the database parse_status and background job status.
         """
         mcap_log = self.get_object()
 
@@ -837,25 +576,28 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
             "parse_task_id": mcap_log.parse_task_id,
         }
 
-        # If there's a task ID, get detailed Celery task status
+        # If there's a task ID, get detailed background job status
         if mcap_log.parse_task_id:
             try:
-                task_result = AsyncResult(mcap_log.parse_task_id)
-                response_data["task_state"] = task_result.state
-                response_data["task_info"] = {
-                    "ready": task_result.ready(),
-                    "successful": task_result.successful()
-                    if task_result.ready()
-                    else None,
-                    "failed": task_result.failed() if task_result.ready() else None,
-                }
-
-                # Add result or error if available
-                if task_result.ready():
-                    if task_result.successful():
-                        response_data["task_info"]["result"] = task_result.result
-                    elif task_result.failed():
-                        response_data["task_info"]["error"] = str(task_result.info)
+                job = BackgroundJob.objects.filter(id=mcap_log.parse_task_id).first()
+                if job is None:
+                    response_data["task_state"] = "UNKNOWN"
+                    response_data["task_info"] = {"ready": False}
+                else:
+                    response_data["task_state"] = job.status.upper()
+                    ready = job.status in {
+                        BackgroundJob.Status.COMPLETED,
+                        BackgroundJob.Status.FAILED,
+                    }
+                    response_data["task_info"] = {
+                        "ready": ready,
+                        "successful": job.status == BackgroundJob.Status.COMPLETED,
+                        "failed": job.status == BackgroundJob.Status.FAILED,
+                    }
+                    if ready and job.result:
+                        response_data["task_info"]["result"] = job.result
+                    if ready and job.error_message:
+                        response_data["task_info"]["error"] = job.error_message
             except Exception as e:
                 response_data["task_info"] = {
                     "error": f"Could not fetch task status: {str(e)}"
@@ -894,27 +636,11 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 file_name = f"{timestamp}_{uploaded_file.name}"
                 file_path = media_dir / file_name
-                hasher = hashlib.sha256()
 
                 # Save the uploaded file
                 with open(file_path, "wb+") as destination:
                     for chunk in uploaded_file.chunks():
                         destination.write(chunk)
-                        hasher.update(chunk)
-
-                content_sha256 = hasher.hexdigest()
-
-                duplicate = self._find_duplicate_log(request, content_sha256)
-                if duplicate is not None:
-                    try:
-                        file_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    duplicate_data = self.get_serializer(duplicate).data
-                    duplicate_data["deduplicated"] = True
-                    duplicate_data["duplicate_of"] = duplicate.id
-                    results.append(duplicate_data)
-                    continue
 
                 saved_file_relpath = str(file_path.relative_to(settings.MEDIA_ROOT))
 
@@ -938,13 +664,11 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
                     create_kwargs["workspace"] = workspace
                 if self._has_created_by_field():
                     create_kwargs["created_by"] = request.user
-                if self._has_content_sha_field():
-                    create_kwargs["content_sha256"] = content_sha256
                 mcap_log = McapLog.objects.create(**create_kwargs)
 
                 # Trigger recovery (which will trigger parsing when done)
-                recovery_task = recover_mcap_file.delay(mcap_log.id, saved_file_relpath)
-                mcap_log.parse_task_id = recovery_task.id
+                recovery_job = enqueue_ingest_job(mcap_log.id, saved_file_relpath)
+                mcap_log.parse_task_id = str(recovery_job.id)
                 mcap_log.save(update_fields=["parse_task_id"])
 
                 # Serialize the result
@@ -999,14 +723,25 @@ class McapLogViewSet(ExportActionsMixin, viewsets.ModelViewSet):
                     else None,
                 }
 
-                # Get Celery task status if task ID exists
+                # Get background job status if task ID exists
                 if mcap_log.parse_task_id:
                     try:
-                        task_result = AsyncResult(mcap_log.parse_task_id)
-                        job_data["task_state"] = task_result.state
-                        job_data["task_ready"] = task_result.ready()
+                        job = (
+                            BackgroundJob.objects.filter(id=mcap_log.parse_task_id)
+                            .only("status")
+                            .first()
+                        )
+                        if job is None:
+                            job_data["task_state"] = "UNKNOWN"
+                            job_data["task_ready"] = False
+                        else:
+                            job_data["task_state"] = job.status.upper()
+                            job_data["task_ready"] = job.status in {
+                                BackgroundJob.Status.COMPLETED,
+                                BackgroundJob.Status.FAILED,
+                            }
                     except Exception as e:
-                        # If we can't get task status, still include the record
+                        # If we can't get job status, still include the record
                         job_data["task_state"] = "UNKNOWN"
                         job_data["task_error"] = str(e)
                 else:

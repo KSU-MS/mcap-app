@@ -98,10 +98,10 @@ class DownloadRequestSerializer(serializers.Serializer):
         help_text="List of MCAP log IDs to download",
     )
     format = serializers.ChoiceField(
-        choices=["mcap", "csv_omni", "csv_tvn", "ld"],
+        choices=["mcap"],
         default="mcap",
         required=False,
-        help_text="Output format: 'mcap' for original files, 'csv_omni', 'csv_tvn', or 'ld' for conversion",
+        help_text="Output format: 'mcap' for original files",
     )
     resample_hz = serializers.FloatField(
         required=False,
@@ -119,7 +119,7 @@ class ExportCreateRequestSerializer(serializers.Serializer):
         help_text="List of MCAP log IDs to export",
     )
     format = serializers.ChoiceField(
-        choices=["csv_omni", "csv_tvn", "ld"],
+        choices=["h5"],
         help_text="Asynchronous export format",
     )
     resample_hz = serializers.FloatField(

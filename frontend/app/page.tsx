@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import 'leaflet/dist/leaflet.css';
@@ -18,10 +18,9 @@ import { MapModal } from '@/components/mcap/modals/MapModal';
 import {
   fetchLogs, fetchLog, fetchGeoJson, fetchLookups,
   updateLog, deleteLogs, bulkDownload, checkDbStatus,
-  fetchCurrentUser, logoutSession,
+  createExportJob, downloadExportJob, fetchActiveExportJobs, fetchCurrentUser, logoutSession,
 } from '@/lib/mcap/api';
-import { getWorkspaceSocketUrl, type WorkspaceSocketMessage, type WorkspaceSocketState } from '@/lib/mcap/ws';
-import type { McapLog, DownloadFormat, GeoJsonFeatureCollection, ResampleRateHz } from '@/lib/mcap/types';
+import type { McapLog, DownloadFormat, ExportJob, GeoJsonFeatureCollection, ResampleRateHz } from '@/lib/mcap/types';
 
 const PAGE_SIZE = 10;
 
@@ -64,20 +63,12 @@ function McapDashboard() {
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [mounted, setMounted] = useState(false);
   const [authReady, setAuthReady] = useState(false);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<number | null>(null);
-  const [wsState, setWsState] = useState<WorkspaceSocketState>('disconnected');
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectAttemptRef = useRef(0);
-  const exportStatusRef = useRef<Record<number, string>>({});
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const me = await fetchCurrentUser();
-        const nextWorkspaceId = me.default_workspace_id ?? me.workspace_ids?.[0] ?? null;
-        setActiveWorkspaceId(nextWorkspaceId);
+        await fetchCurrentUser();
         setAuthReady(true);
       } catch {
         router.replace('/login');
@@ -108,6 +99,7 @@ function McapDashboard() {
   const [downloadResampleHz, setDownloadResampleHz] = useState<ResampleRateHz>(20);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
 
   const [mapOpen, setMapOpen] = useState(false);
   const [mapLogId, setMapLogId] = useState<number | null>(null);
@@ -142,6 +134,15 @@ function McapDashboard() {
   }, []);
 
   // ── Load logs whenever URL params change ──
+  const sortExportJobs = useCallback((jobs: ExportJob[]) => {
+    const sorted = [...jobs].sort((a, b) => {
+      const aTime = new Date(a.updated_at ?? a.created_at ?? 0).getTime();
+      const bTime = new Date(b.updated_at ?? b.created_at ?? 0).getTime();
+      return bTime - aTime;
+    });
+    return sorted.slice(0, 10);
+  }, []);
+
   const loadLogs = useCallback(async () => {
     if (!authReady) return;
     setLoading(true);
@@ -167,99 +168,13 @@ function McapDashboard() {
   }, [authReady]);
 
   useEffect(() => {
-    if (!authReady || !activeWorkspaceId) return;
-
-    let closedIntentionally = false;
-
-    const connect = () => {
-      if (closedIntentionally) return;
-      setWsState(reconnectAttemptRef.current > 0 ? 'reconnecting' : 'connecting');
-      const ws = new WebSocket(getWorkspaceSocketUrl(activeWorkspaceId));
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        reconnectAttemptRef.current = 0;
-        setWsState('connected');
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data) as WorkspaceSocketMessage;
-          if (payload.event_type === 'log.status' && payload.entity_type === 'mcap_log' && payload.entity_id) {
-            const status = payload.status as {
-              recovery_status?: string;
-              parse_status?: string;
-              gps_status?: string;
-              map_preview_status?: string;
-            } | undefined;
-            if (!status) return;
-
-            setLogs((prev) => prev.map((log) => (
-              log.id === payload.entity_id
-                ? {
-                  ...log,
-                  recovery_status: status.recovery_status ?? log.recovery_status,
-                  parse_status: status.parse_status ?? log.parse_status,
-                }
-                : log
-            )));
-
-            const isTerminal = (value?: string) => {
-              const normalized = value?.toLowerCase();
-              return normalized === 'completed' || normalized === 'success' || normalized?.startsWith('error') || normalized === 'failed';
-            };
-            if (!isTerminal(status.recovery_status) || !isTerminal(status.parse_status)) {
-              setProcessingIds((prev) => prev.includes(payload.entity_id as number) ? prev : [...prev, payload.entity_id as number]);
-            } else {
-              setProcessingIds((prev) => prev.filter((id) => id !== payload.entity_id));
-            }
-          }
-
-          if (payload.event_type === 'export.status' && payload.entity_type === 'export_job' && payload.entity_id) {
-            const nextStatus = String(payload.status ?? 'unknown');
-            const previousStatus = exportStatusRef.current[payload.entity_id];
-            exportStatusRef.current[payload.entity_id] = nextStatus;
-            if (nextStatus === 'completed' && previousStatus !== 'completed') {
-              playChime();
-              showToast(`Export job #${payload.entity_id} completed`);
-            }
-            if (nextStatus === 'failed' && previousStatus !== 'failed') {
-              showToast(`Export job #${payload.entity_id} failed`);
-            }
-          }
-        } catch {
-          // Ignore malformed payloads
-        }
-      };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-        if (closedIntentionally) {
-          setWsState('disconnected');
-          return;
-        }
-
-        reconnectAttemptRef.current += 1;
-        const delayMs = Math.min(1000 * (2 ** Math.min(reconnectAttemptRef.current, 4)), 10000);
-        setWsState('reconnecting');
-        reconnectTimerRef.current = setTimeout(connect, delayMs);
-      };
-    };
-
-    connect();
-
-    return () => {
-      closedIntentionally = true;
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-      const ws = wsRef.current;
-      wsRef.current = null;
-      if (ws) ws.close();
-      setWsState('disconnected');
-    };
-  }, [authReady, activeWorkspaceId, showToast, playChime]);
+    if (!authReady) return;
+    fetchActiveExportJobs()
+      .then((jobs) => setExportJobs(sortExportJobs(jobs)))
+      .catch(() => {
+        // Export jobs panel is optional; ignore load errors here.
+      });
+  }, [authReady, sortExportJobs]);
 
   useEffect(() => {
     const run = async () => {
@@ -394,14 +309,36 @@ function McapDashboard() {
     setDownloading(true);
     setDownloadError(null);
     try {
-      await bulkDownload(selectedIds, downloadFormat, downloadResampleHz);
+      if (downloadFormat === 'mcap') {
+        await bulkDownload(selectedIds, downloadFormat, downloadResampleHz);
+        setDownloadOpen(false);
+        playChime();
+        showToast('Download complete!');
+        return;
+      }
+
+      const job = await createExportJob(selectedIds, downloadFormat, downloadResampleHz);
+      setExportJobs((prev) => {
+        const existing = prev.find((item) => item.id === job.id);
+        if (existing) {
+          return sortExportJobs(prev.map((item) => (item.id === job.id ? { ...item, ...job } : item)));
+        }
+        return sortExportJobs([job, ...prev]);
+      });
       setDownloadOpen(false);
-      playChime();
-      showToast('Download complete!');
+      showToast(`Export job #${job.id} started (${downloadFormat.toUpperCase()})`);
     } catch (err) {
       setDownloadError(err instanceof Error ? err.message : 'Download failed');
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleExportDownload = async (jobId: number) => {
+    try {
+      await downloadExportJob(jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to download export bundle');
     }
   };
 
@@ -432,7 +369,8 @@ function McapDashboard() {
     <div className="min-h-screen py-8 px-4 sm:px-8">
       {/* DB status indicator — only render after mount to avoid hydration mismatch */}
       {mounted && (
-        <div className="fixed top-4 right-4 z-50 flex flex-col items-end gap-1.5">
+        <div className="mx-auto mb-3 flex max-w-7xl justify-center">
+          <div className="flex flex-wrap items-center justify-center gap-2">
           <div
             className="flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
             style={{
@@ -450,20 +388,6 @@ function McapDashboard() {
             />
             {dbStatus}
           </div>
-          <div
-            className="flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1"
-            style={{
-              background: 'rgba(232,224,212,0.92)',
-              border: '1px solid rgba(42,38,34,0.2)',
-              color: 'var(--sienna)',
-              backdropFilter: 'blur(4px)',
-            }}
-            title={`Realtime: ${wsState}`}
-          >
-            <span
-              className={`block h-2 w-2 rounded-full ${wsState === 'connected' ? 'bg-green-500' : wsState === 'reconnecting' ? 'bg-amber-400' : 'bg-red-500'}`}
-            />
-            {`realtime ${wsState}`}
           </div>
         </div>
       )}
@@ -531,6 +455,79 @@ function McapDashboard() {
             loadLogs();
           }}
         />
+
+        {exportJobs.length > 0 && (
+          <div className="skeuo-card mb-6">
+            <div className="skeuo-card-header">
+              <h2 className="font-serif font-semibold text-base" style={{ color: 'var(--charcoal)' }}>
+                Recent Exports
+              </h2>
+            </div>
+            <div className="skeuo-card-content space-y-2">
+              {exportJobs.map((job) => {
+                const totalItems = job.total_items ?? job.requested_ids?.length ?? 0;
+                const completedItems = job.completed_items ?? 0;
+                const failedItems = job.failed_items ?? 0;
+                const doneItems = completedItems + failedItems;
+                const progress = typeof job.progress_percent === 'number'
+                  ? Math.max(0, Math.min(100, Math.round(job.progress_percent)))
+                  : totalItems > 0
+                    ? Math.max(0, Math.min(100, Math.round((doneItems / totalItems) * 100)))
+                    : (job.status === 'completed' || job.status === 'completed_with_errors' ? 100 : 0);
+                const formatLabel = job.format.toUpperCase();
+                const ready = job.status === 'completed' || job.status === 'completed_with_errors';
+                const statusTone = ready
+                  ? { background: 'rgba(46,107,62,0.12)', color: 'var(--success)', border: '1px solid rgba(46,107,62,0.25)' }
+                  : job.status === 'failed'
+                    ? { background: 'rgba(179,58,46,0.1)', color: 'var(--danger)', border: '1px solid rgba(179,58,46,0.25)' }
+                    : { background: 'rgba(195,136,34,0.12)', color: 'var(--warning-text)', border: '1px solid rgba(122,90,26,0.25)' };
+
+                return (
+                  <div
+                    key={job.id}
+                    className="rounded-md px-3 py-2.5"
+                    style={{ background: 'rgba(42,38,34,0.04)', border: '1px solid rgba(42,38,34,0.12)' }}
+                  >
+                    <div className="flex flex-wrap items-center gap-2 justify-between">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold" style={{ color: 'var(--charcoal)' }}>
+                          Export #{job.id} · {formatLabel} · {job.resample_hz}Hz
+                        </p>
+                        <p className="text-xs" style={{ color: 'var(--sienna)' }}>
+                          {totalItems > 0
+                            ? `${doneItems}/${totalItems} items processed`
+                            : 'Waiting for item stats...'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold" style={statusTone}>
+                          {job.status.replaceAll('_', ' ')}
+                        </span>
+                        {ready && (
+                          <button
+                            className="skeuo-btn-primary"
+                            onClick={() => handleExportDownload(job.id)}
+                          >
+                            Download ZIP
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-2 h-1.5 w-full rounded-full" style={{ background: 'rgba(42,38,34,0.12)' }}>
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${progress}%`,
+                          background: ready ? 'var(--success)' : 'var(--ochre)',
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Logs card */}
         <div className="skeuo-card">

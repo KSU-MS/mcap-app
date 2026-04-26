@@ -1,36 +1,29 @@
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
 
-from asgiref.sync import async_to_sync
-from django.contrib.auth.models import AnonymousUser
 from rest_framework.test import APIClient
 
-from .conversion.ld_writer import write_ld_file
-from .conversion.mcap_converter import McapToCsvConverter
-from .services.contracts import ConversionRequest, ExportProgressSnapshot
-from .services.conversion_service import McapConversionService
+from .services.contracts import ExportProgressSnapshot
 from .services.status_constants import is_export_terminal, is_mcap_terminal
 from .serializers import DownloadRequestSerializer, ExportCreateRequestSerializer
 from .models import ExportItem, ExportJob, McapLog, Workspace, WorkspaceMember
-from .jobs.tasks_export import _broadcast_export_job_status
-from .jobs.tasks_ingest import _broadcast_log_status
-from .consumers import WorkspaceJobsConsumer
-from .conversion.telemetry_log import DataLog
+from .tasks import is_non_retryable_recover_error
 
 
 class DownloadRequestSerializerTests(SimpleTestCase):
+    def test_default_format_is_mcap(self):
+        serializer = DownloadRequestSerializer(data={"ids": [1]})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["format"], "mcap")
+
     def test_default_resample_rate_is_applied(self):
-        serializer = DownloadRequestSerializer(data={"ids": [1], "format": "csv_omni"})
+        serializer = DownloadRequestSerializer(data={"ids": [1], "format": "mcap"})
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertEqual(serializer.validated_data["resample_hz"], 20.0)
 
     def test_resample_rate_range_is_enforced(self):
         serializer = DownloadRequestSerializer(
-            data={"ids": [1], "format": "ld", "resample_hz": 0.5}
+            data={"ids": [1], "format": "mcap", "resample_hz": 0.5}
         )
         self.assertFalse(serializer.is_valid())
         self.assertIn("resample_hz", serializer.errors)
@@ -38,203 +31,21 @@ class DownloadRequestSerializerTests(SimpleTestCase):
 
 class ExportCreateRequestSerializerTests(SimpleTestCase):
     def test_default_resample_rate_is_applied(self):
-        serializer = ExportCreateRequestSerializer(
-            data={"ids": [1], "format": "csv_tvn"}
-        )
+        serializer = ExportCreateRequestSerializer(data={"ids": [1], "format": "h5"})
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertEqual(serializer.validated_data["resample_hz"], 20.0)
 
 
-class McapConverterResampleTests(SimpleTestCase):
-    def test_resample_timestamp_groups_returns_fixed_interval(self):
-        converter = McapToCsvConverter()
-        groups = {
-            0: {"speed": "1"},
-            500_000_000: {"speed": "2"},
-            1_000_000_000: {"speed": "3"},
-        }
-
-        result = converter._resample_timestamp_groups(groups, 2.0)
-
-        self.assertEqual([row[0] for row in result], [0, 500_000_000, 1_000_000_000])
-        self.assertEqual(result[-1][1]["speed"], "3")
-
-
-class DataLogTests(SimpleTestCase):
-    def test_datalog_resample_aligns_channels_to_common_timebase(self):
-        log = DataLog(name="test")
-        log.add_sample("speed", 10.0, 1.0)
-        log.add_sample("speed", 10.5, 2.0)
-        log.add_sample("rpm", 10.25, 1000.0)
-        log.add_sample("rpm", 10.75, 2000.0)
-
-        log.resample(2.0)
-
-        speed = log.channels["speed"].messages
-        rpm = log.channels["rpm"].messages
-        self.assertEqual(len(speed), len(rpm))
-        self.assertEqual([m.timestamp for m in speed], [10.0, 10.5, 10.75])
-        self.assertEqual([m.value for m in speed], [1.0, 2.0, 2.0])
-        self.assertEqual([m.value for m in rpm], [0.0, 1000.0, 1000.0])
-
-
-class McapConverterFieldExtractionTests(SimpleTestCase):
-    class _Field:
-        LABEL_REPEATED = 3
-
-        def __init__(self, name, label=1):
-            self.name = name
-            self.label = label
-
-    class _Proto:
-        def ListFields(self):
-            return [
-                (McapConverterFieldExtractionTests._Field("speed"), 123.4),
-                (McapConverterFieldExtractionTests._Field("gear"), 3),
-                (McapConverterFieldExtractionTests._Field("valid"), True),
-                (McapConverterFieldExtractionTests._Field("name"), "abc"),
-                (
-                    McapConverterFieldExtractionTests._Field(
-                        "samples",
-                        label=McapConverterFieldExtractionTests._Field.LABEL_REPEATED,
-                    ),
-                    [1, 2, 3],
-                ),
-            ]
-
-    def test_iter_numeric_fields_filters_to_numeric_scalars(self):
-        converter = McapToCsvConverter()
-        values = converter._iter_numeric_fields(self._Proto())
-        self.assertEqual(values, [("speed", 123.4), ("gear", 3.0), ("valid", 1.0)])
-
-
-class LdWriterTests(SimpleTestCase):
-    def test_write_ld_file_uses_native_backend_without_env(self):
-        datalog = DataLog(name="test")
-        datalog.add_sample("speed", 0.0, 1.0)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "native.ld"
-            os.environ.pop("MOTEC_LD_WRITER_CMD", None)
-            os.environ.pop("MOTEC_LOG_GENERATOR_DIR", None)
-            write_ld_file(datalog, output_path, 20.0)
-            self.assertTrue(output_path.exists())
-            self.assertGreater(output_path.stat().st_size, 0)
-
-    def test_write_ld_file_invokes_external_command(self):
-        datalog = DataLog(name="test")
-        datalog.add_sample("speed", 0.0, 1.0)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "export.ld"
-            os.environ["MOTEC_LD_WRITER_CMD"] = (
-                "python -c \"open('{output}','wb').write(b'LD')\""
-            )
-            try:
-                with patch(
-                    "api.conversion.ld_writer.write_ld_native",
-                    side_effect=RuntimeError("native failed"),
-                ):
-                    write_ld_file(datalog, output_path, 20.0)
-                self.assertTrue(output_path.exists())
-                self.assertEqual(output_path.read_bytes(), b"LD")
-            finally:
-                os.environ.pop("MOTEC_LD_WRITER_CMD", None)
-
-    def test_write_ld_file_surfaces_writer_failure(self):
-        datalog = DataLog(name="test")
-        datalog.add_sample("speed", 0.0, 1.0)
-
-        os.environ["MOTEC_LD_WRITER_CMD"] = 'python -c "import sys; sys.exit(4)"'
-        try:
-            with patch(
-                "api.conversion.ld_writer.write_ld_native",
-                side_effect=RuntimeError("native failed"),
-            ):
-                with self.assertRaises(RuntimeError):
-                    write_ld_file(datalog, Path("/tmp/out.ld"), 20.0)
-        finally:
-            os.environ.pop("MOTEC_LD_WRITER_CMD", None)
-
-    def test_write_ld_file_supports_motec_log_generator_dir(self):
-        datalog = DataLog(name="test")
-        datalog.add_sample("speed", 0.0, 1.0)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            generator_dir = Path(temp_dir) / "MotecLogGenerator"
-            generator_dir.mkdir(parents=True, exist_ok=True)
-            (generator_dir / "motec_log_generator.py").write_text("# stub\n")
-
-            output_path = Path(temp_dir) / "export.ld"
-            os.environ["MOTEC_LOG_GENERATOR_DIR"] = str(generator_dir)
-
-            def _fake_run(command_parts, capture_output, text, cwd):
-                output_path.write_bytes(b"LD")
-
-                class _Result:
-                    returncode = 0
-                    stdout = ""
-                    stderr = ""
-
-                return _Result()
-
-            try:
-                with patch(
-                    "api.conversion.ld_writer.write_ld_native",
-                    side_effect=RuntimeError("native failed"),
-                ):
-                    with patch(
-                        "api.conversion.ld_writer.subprocess.run", side_effect=_fake_run
-                    ):
-                        write_ld_file(datalog, output_path, 20.0)
-                self.assertTrue(output_path.exists())
-            finally:
-                os.environ.pop("MOTEC_LOG_GENERATOR_DIR", None)
-
-
-class ConversionServiceTests(SimpleTestCase):
-    def test_convert_to_ld_delegates_to_converter_with_ld_format(self):
-        class _StubConverter:
-            def __init__(self):
-                self.calls = []
-
-            def convert_to_csv(self, source, output, format, resample_hz):
-                self.calls.append(
-                    {
-                        "source": source,
-                        "output": output,
-                        "format": format,
-                        "resample_hz": resample_hz,
-                    }
-                )
-                return output
-
-        stub = _StubConverter()
-        service = McapConversionService(converter=stub)
-
-        result = service.convert_to_ld("/tmp/in.mcap", "/tmp/out.ld", 25.0)
-
-        self.assertEqual(result, "/tmp/out.ld")
-        self.assertEqual(len(stub.calls), 1)
-        self.assertEqual(stub.calls[0]["format"], "ld")
-        self.assertEqual(stub.calls[0]["resample_hz"], 25.0)
-
-    def test_convert_with_result_returns_error_without_raising(self):
-        class _FailingConverter:
-            def convert_to_csv(self, source, output, format, resample_hz):
-                raise RuntimeError("boom")
-
-        service = McapConversionService(converter=_FailingConverter())
-        result = service.convert_with_result(
-            ConversionRequest(
-                source_path=Path("/tmp/in.mcap"),
-                output_path=Path("/tmp/out.ld"),
-                format_suffix="ld",
-                resample_hz=20.0,
-            )
+class RecoverTaskErrorClassificationTests(SimpleTestCase):
+    def test_invalid_magic_is_non_retryable(self):
+        error = RuntimeError(
+            "mcap recover failed: failed to recover: Invalid magic at start of file"
         )
-        self.assertFalse(result.success)
-        self.assertIn("boom", result.error)
+        self.assertTrue(is_non_retryable_recover_error(error))
+
+    def test_transient_error_remains_retryable(self):
+        error = RuntimeError("temporary io error")
+        self.assertFalse(is_non_retryable_recover_error(error))
 
 
 class StatusConstantsTests(SimpleTestCase):
@@ -254,7 +65,7 @@ class ContractsTests(SimpleTestCase):
         snapshot = ExportProgressSnapshot(
             id=7,
             status="processing",
-            format="ld",
+            format="h5",
             resample_hz=20.0,
             error_message=None,
             total_items=4,
@@ -268,26 +79,12 @@ class ContractsTests(SimpleTestCase):
 
 
 class TaskSplitCompatibilityTests(SimpleTestCase):
-    def test_tasks_module_exports_named_celery_tasks(self):
+    def test_tasks_module_exports_background_job_helpers(self):
         from . import tasks as tasks_module
 
-        self.assertEqual(
-            tasks_module.recover_mcap_file.name, "api.tasks.recover_mcap_file"
-        )
-        self.assertEqual(tasks_module.parse_mcap_file.name, "api.tasks.parse_mcap_file")
-        self.assertEqual(
-            tasks_module.convert_export_item.name, "api.tasks.convert_export_item"
-        )
-        self.assertEqual(
-            tasks_module.finalize_export_job.name, "api.tasks.finalize_export_job"
-        )
-
-    def test_conversion_modules_import_from_new_package(self):
-        from .conversion.mcap_converter import McapToCsvConverter as NewConverter
-        from .conversion.telemetry_log import DataLog as NewDataLog
-
-        self.assertIsNotNone(NewConverter)
-        self.assertIsNotNone(NewDataLog)
+        self.assertTrue(callable(tasks_module.recover_mcap_file))
+        self.assertTrue(callable(tasks_module.parse_mcap_file))
+        self.assertTrue(callable(tasks_module.enqueue_export_job))
 
 
 class ExportAuthAccessTests(TestCase):
@@ -329,7 +126,7 @@ class ExportAuthAccessTests(TestCase):
     def test_export_status_allows_authenticated_workspace_access(self):
         public_job = ExportJob.objects.create(
             workspace=self.workspace,
-            format="csv_omni",
+            format="h5",
             resample_hz=20.0,
             status="processing",
             requested_ids=[],
@@ -347,7 +144,7 @@ class ExportAuthAccessTests(TestCase):
         private_job = ExportJob.objects.create(
             workspace=self.workspace,
             created_by=self.user,
-            format="csv_tvn",
+            format="h5",
             resample_hz=20.0,
             status="processing",
             requested_ids=[],
@@ -361,7 +158,7 @@ class ExportAuthAccessTests(TestCase):
         private_job = ExportJob.objects.create(
             workspace=self.workspace,
             created_by=self.user,
-            format="ld",
+            format="h5",
             resample_hz=20.0,
             status="completed",
             requested_ids=[],
@@ -381,7 +178,7 @@ class ExportAuthAccessTests(TestCase):
 
         response = self.client.post(
             "/api/mcap-logs/exports/",
-            data={"ids": [private_log.id], "format": "csv_omni", "resample_hz": 20.0},
+            data={"ids": [private_log.id], "format": "h5", "resample_hz": 20.0},
             format="json",
         )
 
@@ -391,7 +188,7 @@ class ExportAuthAccessTests(TestCase):
         private_job = ExportJob.objects.create(
             workspace=self.workspace,
             created_by=self.user,
-            format="csv_tvn",
+            format="h5",
             resample_hz=20.0,
             status="processing",
             requested_ids=[],
@@ -488,161 +285,3 @@ class AuthSessionTests(TestCase):
 
         me_after_logout = self.client.get("/api/auth/me/")
         self.assertEqual(me_after_logout.status_code, 403)
-
-
-class RealtimeBroadcastTests(TestCase):
-    def setUp(self):
-        self.user = get_user_model().objects.create_user(
-            username="realtime-user", password="password123"
-        )
-        self.workspace = Workspace.objects.create(name="Realtime", slug="realtime")
-        WorkspaceMember.objects.create(
-            user=self.user,
-            workspace=self.workspace,
-            role=WorkspaceMember.ROLE_ADMIN,
-        )
-
-    @patch("api.jobs.tasks_export.broadcast_workspace_event")
-    def test_export_status_broadcast_payload(self, broadcast_mock):
-        log = McapLog.objects.create(
-            workspace=self.workspace,
-            created_by=self.user,
-            file_name="sample.mcap",
-        )
-        job = ExportJob.objects.create(
-            workspace=self.workspace,
-            created_by=self.user,
-            format="csv_omni",
-            status="processing",
-            requested_ids=[log.id],
-        )
-        ExportItem.objects.create(job=job, mcap_log=log, status="completed")
-
-        _broadcast_export_job_status(job)
-
-        broadcast_mock.assert_called_once()
-        workspace_id, payload = broadcast_mock.call_args.args
-        self.assertEqual(workspace_id, self.workspace.id)
-        self.assertEqual(payload["event_type"], "export.status")
-        self.assertEqual(payload["entity_type"], "export_job")
-        self.assertEqual(payload["entity_id"], job.id)
-
-    @patch("api.jobs.tasks_ingest.broadcast_workspace_event")
-    def test_log_status_broadcast_payload(self, broadcast_mock):
-        log = McapLog.objects.create(
-            workspace=self.workspace,
-            created_by=self.user,
-            file_name="sample.mcap",
-            recovery_status="processing",
-            parse_status="pending",
-            gps_status="pending",
-            map_preview_status="pending",
-        )
-
-        _broadcast_log_status(log)
-
-        broadcast_mock.assert_called_once()
-        workspace_id, payload = broadcast_mock.call_args.args
-        self.assertEqual(workspace_id, self.workspace.id)
-        self.assertEqual(payload["event_type"], "log.status")
-        self.assertEqual(payload["entity_type"], "mcap_log")
-        self.assertEqual(payload["entity_id"], log.id)
-
-
-class WorkspaceConsumerTests(TestCase):
-    class _DummyChannelLayer:
-        def __init__(self):
-            self.group_add_calls = []
-            self.group_discard_calls = []
-
-        async def group_add(self, group_name, channel_name):
-            self.group_add_calls.append((group_name, channel_name))
-
-        async def group_discard(self, group_name, channel_name):
-            self.group_discard_calls.append((group_name, channel_name))
-
-    class _TestWorkspaceJobsConsumer(WorkspaceJobsConsumer):
-        def __init__(self):
-            super().__init__()
-            self.accepted = False
-            self.closed_code = None
-            self.sent_payloads = []
-            self.channel_name = "test-channel"
-
-        async def accept(self):
-            self.accepted = True
-
-        async def close(self, code=None):
-            self.closed_code = code
-
-        async def send_json(self, content, close=False):
-            self.sent_payloads.append(content)
-
-    def setUp(self):
-        self.user = get_user_model().objects.create_user(
-            username="ws-user",
-            password="password123",
-        )
-        self.workspace = Workspace.objects.create(name="WS Team", slug="ws-team")
-        WorkspaceMember.objects.create(
-            user=self.user,
-            workspace=self.workspace,
-            role=WorkspaceMember.ROLE_VIEWER,
-        )
-
-    def _build_consumer(self, user, workspace_id):
-        consumer = self._TestWorkspaceJobsConsumer()
-        consumer.channel_layer = self._DummyChannelLayer()
-        consumer.scope = {
-            "user": user,
-            "url_route": {"kwargs": {"workspace_id": str(workspace_id)}},
-        }
-        return consumer
-
-    def test_consumer_rejects_anonymous_user(self):
-        consumer = self._build_consumer(AnonymousUser(), self.workspace.id)
-
-        async_to_sync(consumer.connect)()
-
-        self.assertFalse(consumer.accepted)
-        self.assertEqual(consumer.closed_code, 4401)
-
-    def test_consumer_rejects_invalid_workspace_id(self):
-        consumer = self._build_consumer(self.user, "bad")
-
-        async_to_sync(consumer.connect)()
-
-        self.assertFalse(consumer.accepted)
-        self.assertEqual(consumer.closed_code, 4400)
-
-    def test_consumer_rejects_non_member(self):
-        other_workspace = Workspace.objects.create(name="Other", slug="ws-other")
-        consumer = self._build_consumer(self.user, other_workspace.id)
-
-        async_to_sync(consumer.connect)()
-
-        self.assertFalse(consumer.accepted)
-        self.assertEqual(consumer.closed_code, 4403)
-
-    def test_consumer_accepts_member_and_sends_ready_event(self):
-        consumer = self._build_consumer(self.user, self.workspace.id)
-
-        async_to_sync(consumer.connect)()
-
-        self.assertTrue(consumer.accepted)
-        self.assertIsNone(consumer.closed_code)
-        self.assertEqual(
-            consumer.channel_layer.group_add_calls,
-            [(f"workspace_{self.workspace.id}", "test-channel")],
-        )
-        self.assertEqual(len(consumer.sent_payloads), 1)
-        self.assertEqual(consumer.sent_payloads[0]["event_type"], "connection.ready")
-
-    def test_workspace_event_forwards_payload(self):
-        consumer = self._build_consumer(self.user, self.workspace.id)
-
-        async_to_sync(consumer.workspace_event)(
-            {"payload": {"event_type": "export.status"}}
-        )
-
-        self.assertEqual(consumer.sent_payloads, [{"event_type": "export.status"}])

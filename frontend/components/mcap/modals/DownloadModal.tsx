@@ -49,9 +49,7 @@ export function DownloadModal({
                             </SelectTrigger>
                             <SelectContent style={{ background: 'var(--off-white)' }}>
                                 <SelectItem value="mcap">MCAP (original)</SelectItem>
-                                <SelectItem value="csv_omni">CSV (omni)</SelectItem>
-                                <SelectItem value="csv_tvn">CSV (tvn)</SelectItem>
-                                <SelectItem value="ld">LD (i2) (not yet)</SelectItem>
+                                <SelectItem value="h5">H5</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
@@ -91,7 +89,7 @@ export function DownloadModal({
                             <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
                             {format === 'mcap'
                                 ? 'Preparing ZIP…'
-                                : `Converting to ${format.replace('csv_', '').toUpperCase()} at ${resampleHz}Hz and zipping…`}
+                                : `Starting ${format.toUpperCase()} export job at ${resampleHz}Hz…`}
                         </div>
                     )}
                 </div>
@@ -99,7 +97,7 @@ export function DownloadModal({
                 <DialogFooter className="gap-2 mt-2">
                     <button className="skeuo-btn-ghost" onClick={onClose} disabled={downloading}>Cancel</button>
                     <button className="skeuo-btn-primary" onClick={onDownload} disabled={downloading}>
-                        {downloading ? 'Preparing…' : 'Download'}
+                        {downloading ? 'Preparing…' : format === 'mcap' ? 'Download' : 'Start export'}
                     </button>
                 </DialogFooter>
             </DialogContent>

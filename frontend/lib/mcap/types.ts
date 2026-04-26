@@ -39,8 +39,25 @@ export interface LogFilters {
     page?: number;
 }
 
-export type DownloadFormat = 'mcap' | 'csv_omni' | 'csv_tvn' | 'ld';
+export type DownloadFormat = 'mcap' | 'h5';
 export type ResampleRateHz = 10 | 20 | 50 | 100;
+
+export interface ExportJob {
+    id: number;
+    format: Exclude<DownloadFormat, 'mcap'>;
+    resample_hz: number;
+    status: string;
+    progress_percent?: number;
+    requested_ids: number[];
+    zip_uri?: string | null;
+    error_message?: string | null;
+    total_items?: number;
+    completed_items?: number;
+    failed_items?: number;
+    created_at?: string;
+    updated_at?: string;
+    completed_at?: string | null;
+}
 
 export interface GeoJsonGeometry {
     type: string;

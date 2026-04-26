@@ -1,5 +1,7 @@
 from django.contrib.gis.db import models
 from django.conf import settings
+from django.utils import timezone
+import uuid
 
 
 class Workspace(models.Model):
@@ -152,3 +154,41 @@ class ExportItem(models.Model):
 
     class Meta:
         unique_together = ("job", "mcap_log")
+
+
+class BackgroundJob(models.Model):
+    class Type(models.TextChoices):
+        INGEST_PIPELINE = "ingest_pipeline", "Ingest pipeline"
+        EXPORT_JOB = "export_job", "Export job"
+        MAP_PREVIEW = "map_preview", "Map preview"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job_type = models.CharField(max_length=40, choices=Type.choices)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    payload = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, default="")
+    attempts = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=3)
+    available_at = models.DateTimeField(default=timezone.now)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "available_at", "created_at"]),
+            models.Index(fields=["job_type", "status", "available_at"]),
+        ]

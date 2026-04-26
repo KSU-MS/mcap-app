@@ -3,55 +3,48 @@
 A Django REST Framework backend for managing and parsing **Formula SAE telemetry logs** recorded in the `.mcap` format.
 
 ## Monorepo layout
-- `backend/` — Django + Celery API (PostGIS/Redis)
+- `backend/` — Django + DRF API (PostGIS)
 - `frontend/` — Next.js client (pnpm)
+- `go_worker/` — Go workers (`job_runner`, `mcap_fanout_worker`, `export_convert_worker`)
 
-### Backend conversion architecture
-- `backend/api/conversion/` — MCAP decode, telemetry normalization, and format writers (`csv_omni`, `csv_tvn`, `ld`)
-- `backend/api/services/conversion_service.py` — facade entrypoint used by Celery/export workflows
-- `backend/api/services/contracts.py` — typed request/result/progress contracts for conversion and caching
-- `backend/api/jobs/tasks_ingest.py` — recover/parse/gps/map pipeline tasks
-- `backend/api/jobs/tasks_export.py` — export item conversion + bundle finalization tasks
-- `backend/api/jobs/tasks_status.py` — cache payload builders for polling endpoints
-- `backend/api/tasks.py` — compatibility export module for task imports and Celery task names
+### Worker architecture
+- `go_worker/cmd/job_runner` — DB-backed background job processor (`ingest_pipeline`, `export_job`, `map_preview`)
+- `go_worker/cmd/mcap_fanout_worker` — ingest fanout for summary/GPS/map preview
+- `go_worker/cmd/export_convert_worker` — conversion worker for `h5`
+- `backend/api/services/background_jobs.py` — enqueue-only helpers (no Python job execution path)
 
-### Quick start (uv + Docker infra, no Nix required)
+### Quick start (host mode: app on host, DB in Docker)
 - Copy env file: `cp .env.example .env`
-- Start infrastructure: `docker compose -f compose.dev.yml up -d`
+- Update `.env` for host networking:
+  - `DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/mcap_query_db`
+  - `POSTGRES_HOST=127.0.0.1`
+  - `POSTGRES_PORT=5433`
+  - `MOTEC_LOG_GENERATOR_DIR=/absolute/path/to/MotecLogGenerator`
+- Start infrastructure: `docker compose up -d`
 - Sync backend deps: `uv sync`
 - Migrate DB: `uv run python backend/manage.py migrate`
-- Run backend API: `uv run python backend/manage.py runserver ${DJANGO_HOST:-127.0.0.1}:${DJANGO_PORT:-8000}`
-- Run Celery worker (separate terminal): `uv run celery -A backend worker --loglevel=info`
-- Run frontend: `cd frontend && pnpm install && FRONTEND_PORT=${FRONTEND_PORT:-3000} pnpm run dev`
+- Run backend API:
+  - `cd backend && uv run daphne -b 127.0.0.1 -p 8000 backend.asgi:application`
+- Run background jobs worker (separate terminal):
+  - Go runner (ingest + export + map preview):
+    - `cd go_worker && go build -o mcap_fanout_worker ./cmd/mcap_fanout_worker`
+    - `cd go_worker && go build -o export_convert_worker ./cmd/export_convert_worker`
+    - Optional native H5 build (requires HDF5 dev libs): `cd go_worker && PKG_CONFIG_PATH=/opt/homebrew/opt/hdf5/lib/pkgconfig CGO_CFLAGS='-I/opt/homebrew/opt/hdf5/include' CGO_LDFLAGS='-L/opt/homebrew/opt/hdf5/lib' go build -tags hdf5 -o export_convert_worker ./cmd/export_convert_worker`
+    - `cd go_worker && go build -o job_runner ./cmd/job_runner`
+    - `DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/mcap_query_db MCAP_FANOUT_GO_CMD=./mcap_fanout_worker MCAP_EXPORT_CMD=./export_convert_worker ./job_runner`
+    - Ingest precomputes `h5` artifacts by default (`INGEST_PRECOMPUTE_EXPORTS=true`) under `MEDIA_ROOT/precomputed/<mcap_log_id>/`.
+    - Ingest result status is `completed_with_errors` when any precomputed format fails.
+    - `uv run python backend/manage.py process_jobs` is retired and should not be used.
+- Run frontend:
+  - `cd frontend && pnpm install && FRONTEND_PORT=${FRONTEND_PORT:-3000} pnpm run dev`
 
-### Full stack with Docker Compose
-- `cp .env.example .env`
-- `docker compose -f compose.prod.yml up -d --build`
-- open `http://localhost:13000`
-
-### Makefile shortcuts
-- Local infra up/down:
-  - `make dev-up`
-  - `make dev-down`
-- Production stack up/down:
-  - `make prod-up`
-  - `make prod-down`
-
-### Optional Nix workflow
-- Enter dev shell: `nix develop`
-- Run optional reproducibility checks: `nix flake check`
-
-### Reproducible Docker stack from Nix (no Dockerfile)
-- Build app images with Nix on Linux (`x86_64-linux` or `aarch64-linux`):
-  - `nix build .#packages.x86_64-linux.docker-backend .#packages.x86_64-linux.docker-celery .#packages.x86_64-linux.docker-migrate .#packages.x86_64-linux.docker-frontend`
-- Load images into Docker on that Linux host:
-  - `nix run .#packages.x86_64-linux.docker-load-images`
-- Start full stack (internal networking, only nginx exposed):
-  - `docker compose -f compose.nix.yml up -d`
-- open `http://localhost:13000`
+### Docker Compose
+- This repo now uses a single Compose file for local dev infra: `compose.yml`
+- Start DB: `docker compose up -d`
+- Stop DB: `docker compose down`
 
 Port defaults are env-driven. Copy `.env.example` to `.env` (for Docker Compose) and override any of:
-`DATABASE_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `POSTGRES_CONTAINER_PORT`, `POSTGRES_HOST_PORT`, `REDIS_CONTAINER_PORT`, `REDIS_HOST_PORT`, `NGINX_HOST_PORT`, `DJANGO_HOST`, `DJANGO_PORT`, `FRONTEND_PORT`.
+`DATABASE_URL`, `POSTGRES_CONTAINER_PORT`, `POSTGRES_HOST_PORT`, `NGINX_HOST_PORT`, `DJANGO_HOST`, `DJANGO_PORT`, `FRONTEND_PORT`.
 
 The service automates:
 - Getting MCAP log files from the car’s onboard Pi
@@ -61,6 +54,7 @@ The service automates:
   - Start and end timestamps
   - Duration and channel count
 - Storing all metadata in a relational database for easy querying
+- Precomputing conversion artifacts at ingest: `h5`
 
 Users can manually tag each log with:
 - Car model  
@@ -97,42 +91,4 @@ This data can then be searched or displayed in a frontend dashboard
 
 ---
 
-## To-Do Checklist
-
-###  Core API
-- [X] Create `McapLog` model  
-- [X] Add `Car`, `Driver`, and `EventType` models  
-- [X] Implement `McapLogSerializer`  
-- [X] Implement `McapLogViewSet` with CRUD routes  
-- [X] Add router URLs (`/mcap-logs/`)
-
-
-###  Parsing
-- [X] Use `mcap.reader` to extract:
-  - [X] `captured_at` (from message start time)
-  - [X] `duration_seconds`
-  - [X] `channel_count`
-  - [X] `channels_summary` (topics list)
-- [X]  Parse GPS to get `race location`
-- [ ] Background job system (Celary) to mass ingest data and parse it
-
-###  Database + Metadata
-- [X] Add fields for `recovery_status` and `parse_status`
-- [X] Add foreign keys for `car`, `driver`, `event_type`
-- [X] Add `notes`, `created_at`, and `updated_at`
-- [X] Create migrations and migrate
-
-###  Endpoints & Actions
-- [X] `POST /mcap-logs/{id}/geojson/` - runs the Visvalingam algo to find important points and returns geoJson
-- [ ] `POST /mcap-logs/` — upload + recover + parse  
-- [X] `GET /mcap-logs/` — list all logs with filters  
-- [ ] `GET /mcap-logs/{id}/` — view single log  
-- [ ] `PATCH /mcap-logs/{id}/` — update tags  
-- [ ] `GET /mcap-logs/{id}/channels/` — list channels  
-- [ ] (Optional) `POST /mcap-logs/{id}/recover` — re-run recovery  
-- [ ] (Optional) `POST /mcap-logs/{id}/parse` — re-run parsing  
-
-
 ---
-
-*Project by Pettrus Konnoth – FSAE Data Pipeline*

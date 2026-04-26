@@ -12,6 +12,19 @@ export function UploadCard({ onUploaded, processingCount }: Props) {
     const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showAllSelected, setShowAllSelected] = useState(false);
+
+    const formatFileSize = (bytes: number) => {
+        if (bytes < 1024) return `${bytes} B`;
+        const units = ['KB', 'MB', 'GB'];
+        let value = bytes / 1024;
+        let unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex += 1;
+        }
+        return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+    };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files ?? []);
@@ -22,6 +35,7 @@ export function UploadCard({ onUploaded, processingCount }: Props) {
             setError(null);
         }
         setSelectedFiles(mcap);
+        setShowAllSelected(false);
         e.currentTarget.value = '';
     };
 
@@ -32,6 +46,7 @@ export function UploadCard({ onUploaded, processingCount }: Props) {
         try {
             const ids = await uploadFiles(selectedFiles);
             setSelectedFiles([]);
+            setShowAllSelected(false);
             onUploaded(ids);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Upload failed');
@@ -40,7 +55,9 @@ export function UploadCard({ onUploaded, processingCount }: Props) {
         }
     };
 
-    const totalMB = (selectedFiles.reduce((a, f) => a + f.size, 0) / 1024 / 1024).toFixed(2);
+    const totalBytes = selectedFiles.reduce((a, f) => a + f.size, 0);
+    const visibleCount = showAllSelected ? selectedFiles.length : Math.min(selectedFiles.length, 8);
+    const visibleFiles = selectedFiles.slice(0, visibleCount);
 
     return (
         <div className="skeuo-card mb-6">
@@ -67,36 +84,79 @@ export function UploadCard({ onUploaded, processingCount }: Props) {
                     {/* Selected file summary */}
                     {selectedFiles.length > 0 && (
                         <div className="flex-1 text-sm" style={{ color: 'var(--charcoal-mid)' }}>
-                            <p>
-                                <strong>{selectedFiles.length}</strong> file{selectedFiles.length !== 1 ? 's' : ''} ·{' '}
-                                {totalMB} MB
-                            </p>
-                            <div className="mt-1 space-y-0.5 max-h-20 overflow-y-auto">
-                                {selectedFiles.slice(0, 6).map((f, i) => (
-                                    <div key={i} className="flex justify-between gap-2 text-xs">
-                                        <span className="truncate" style={{ color: 'var(--charcoal)' }}>{f.name}</span>
-                                        <button
-                                            type="button"
-                                            style={{ color: 'var(--sienna)' }}
-                                            className="hover:opacity-70 shrink-0"
-                                            onClick={() => setSelectedFiles((p) => p.filter((_, idx) => idx !== i))}
-                                            disabled={uploading}
+                            <div
+                                className="rounded-md px-3 py-2"
+                                style={{ background: 'rgba(42,38,34,0.04)', border: '1px solid rgba(42,38,34,0.14)' }}
+                            >
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                                    <span>
+                                        <strong>{selectedFiles.length}</strong> file{selectedFiles.length !== 1 ? 's' : ''}
+                                    </span>
+                                    <span>total {formatFileSize(totalBytes)}</span>
+                                    <span>avg {formatFileSize(Math.round(totalBytes / selectedFiles.length))}</span>
+                                </div>
+
+                                <div className="mt-2 max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                                    {visibleFiles.map((f, i) => (
+                                        <div
+                                            key={`${f.name}-${f.lastModified}-${i}`}
+                                            className="flex items-center gap-2 rounded px-2 py-1.5 text-xs"
+                                            style={{ background: 'rgba(232,224,212,0.72)', border: '1px solid rgba(42,38,34,0.09)' }}
                                         >
-                                            Remove
-                                        </button>
-                                    </div>
-                                ))}
-                                {selectedFiles.length > 6 && (
-                                    <p className="text-xs" style={{ color: 'var(--sienna)' }}>
-                                        +{selectedFiles.length - 6} more
-                                    </p>
+                                            <span className="block h-1.5 w-1.5 rounded-full bg-[var(--ochre)] shrink-0" />
+                                            <span className="truncate" style={{ color: 'var(--charcoal)', flex: 1, minWidth: 0 }} title={f.name}>
+                                                {f.name}
+                                            </span>
+                                            <span
+                                                className="shrink-0"
+                                                style={{ color: 'var(--sienna)', fontVariantNumeric: 'tabular-nums' }}
+                                            >
+                                                {formatFileSize(f.size)}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                style={{ color: 'var(--sienna)' }}
+                                                className="hover:opacity-70 shrink-0"
+                                                onClick={() => setSelectedFiles((p) => p.filter((_, idx) => idx !== i))}
+                                                disabled={uploading}
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {selectedFiles.length > visibleCount && (
+                                    <button
+                                        type="button"
+                                        className="text-xs mt-2 hover:opacity-70"
+                                        style={{ color: 'var(--sienna)' }}
+                                        onClick={() => setShowAllSelected(true)}
+                                        disabled={uploading}
+                                    >
+                                        Show {selectedFiles.length - visibleCount} more
+                                    </button>
+                                )}
+                                {showAllSelected && selectedFiles.length > 8 && (
+                                    <button
+                                        type="button"
+                                        className="text-xs mt-2 ml-3 hover:opacity-70"
+                                        style={{ color: 'var(--sienna)' }}
+                                        onClick={() => setShowAllSelected(false)}
+                                        disabled={uploading}
+                                    >
+                                        Show less
+                                    </button>
                                 )}
                             </div>
                             <button
                                 type="button"
                                 className="text-xs mt-1 hover:opacity-70"
                                 style={{ color: 'var(--sienna)' }}
-                                onClick={() => setSelectedFiles([])}
+                                onClick={() => {
+                                    setSelectedFiles([]);
+                                    setShowAllSelected(false);
+                                }}
                                 disabled={uploading}
                             >
                                 Clear all
