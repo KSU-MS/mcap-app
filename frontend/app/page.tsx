@@ -16,13 +16,61 @@ import { DownloadModal } from '@/components/mcap/modals/DownloadModal';
 import { MapModal } from '@/components/mcap/modals/MapModal';
 
 import {
-  fetchLogs, fetchLog, fetchGeoJson, fetchLookups,
-  updateLog, deleteLogs, bulkDownload, checkDbStatus,
-  createExportJob, downloadExportJob, fetchActiveExportJobs, fetchCurrentUser, logoutSession,
+  fetchLog, fetchGeoJson, fetchLookups,
+  updateLog, deleteLogs, bulkDownload,
+  createExportJob, downloadExportJob, logoutSession,
 } from '@/lib/mcap/api';
 import type { McapLog, DownloadFormat, ExportJob, GeoJsonFeatureCollection, ResampleRateHz } from '@/lib/mcap/types';
 
 const PAGE_SIZE = 10;
+
+const DEMO_LOGS: McapLog[] = [
+  {
+    id: 1201,
+    captured_at: '2026-05-03T09:14:00Z',
+    duration_seconds: 312.4,
+    channel_count: 48,
+    channels: ['/imu/data', '/gps/fix', '/can/speed'],
+    cars: ['KS9'],
+    drivers: ['Emil'],
+    event_types: ['Skidpad'],
+    locations: ['Lot North'],
+    tags: ['baseline'],
+    notes: 'Baseline run with warm tires.',
+    recovery_status: 'completed',
+    parse_status: 'completed',
+  },
+  {
+    id: 1202,
+    captured_at: '2026-05-03T11:46:00Z',
+    duration_seconds: 428.9,
+    channel_count: 52,
+    channels: ['/imu/data', '/gps/fix', '/wheel_speed/fl'],
+    cars: ['KS9'],
+    drivers: ['Emil'],
+    event_types: ['Autocross'],
+    locations: ['Track East'],
+    tags: ['tuning', 'suspension'],
+    notes: 'Dampers adjusted +2 clicks rebound.',
+    recovery_status: 'completed',
+    parse_status: 'completed',
+  },
+  {
+    id: 1203,
+    captured_at: '2026-05-03T15:08:00Z',
+    duration_seconds: 205.7,
+    channel_count: 37,
+    channels: ['/imu/data', '/can/brake_pressure'],
+    cars: ['KS9'],
+    drivers: ['Emil'],
+    event_types: ['Brake Test'],
+    locations: ['Pad South'],
+    tags: ['brakes', 'comparison'],
+    notes: 'GPS antenna issue during run.',
+    recovery_status: 'completed',
+    parse_status: 'error: parser timeout',
+  },
+];
 
 // ──────────────────────────────────────────────────────────────
 // The actual page content (needs Suspense for useSearchParams)
@@ -62,20 +110,7 @@ function McapDashboard() {
   // ── DB indicator ──
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [mounted, setMounted] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
   useEffect(() => { setMounted(true); }, []);
-
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        await fetchCurrentUser();
-        setAuthReady(true);
-      } catch {
-        router.replace('/login');
-      }
-    };
-    void checkAuth();
-  }, [router]);
 
   // ── Selection ──
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -144,46 +179,60 @@ function McapDashboard() {
   }, []);
 
   const loadLogs = useCallback(async () => {
-    if (!authReady) return;
     setLoading(true);
     setError(null);
     try {
-      const { logs: data, total } = await fetchLogs(filters);
-      setLogs(data);
-      setTotalCount(total);
+      const search = filters.search.trim().toLowerCase();
+      const filtered = DEMO_LOGS.filter((log) => {
+        const matchesSearch = !search
+          || String(log.id).includes(search)
+          || (log.cars ?? []).some((v) => v.toLowerCase().includes(search))
+          || (log.drivers ?? []).some((v) => v.toLowerCase().includes(search))
+          || (log.event_types ?? []).some((v) => v.toLowerCase().includes(search))
+          || (log.notes ?? '').toLowerCase().includes(search)
+          || (log.tags ?? []).some((v) => v.toLowerCase().includes(search));
+
+        const matchesCar = !filters.car || (log.cars ?? []).includes(filters.car);
+        const matchesDriver = !filters.driver || (log.drivers ?? []).includes(filters.driver);
+        const matchesEventType = !filters.event_type || (log.event_types ?? []).includes(filters.event_type);
+        const matchesLocation = !filters.location || (log.locations ?? []).includes(filters.location);
+        const matchesTag = !filters.tag || (log.tags ?? []).includes(filters.tag);
+        const matchesChannel = !filters.channel || (log.channels ?? []).includes(filters.channel);
+
+        return matchesSearch
+          && matchesCar
+          && matchesDriver
+          && matchesEventType
+          && matchesLocation
+          && matchesTag
+          && matchesChannel;
+      });
+
+      const pageStart = (Math.max(1, filters.page) - 1) * PAGE_SIZE;
+      setLogs(filtered.slice(pageStart, pageStart + PAGE_SIZE));
+      setTotalCount(filtered.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load logs');
     } finally {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.toString(), authReady]);
+  }, [params.toString()]);
 
   useEffect(() => { loadLogs(); }, [loadLogs]);
 
   // ── Load lookups + DB status on mount ──
   useEffect(() => {
-    if (!authReady) return;
-    fetchLookups().then(setLookups);
-  }, [authReady]);
-
-  useEffect(() => {
-    if (!authReady) return;
-    fetchActiveExportJobs()
-      .then((jobs) => setExportJobs(sortExportJobs(jobs)))
-      .catch(() => {
-        // Export jobs panel is optional; ignore load errors here.
-      });
-  }, [authReady, sortExportJobs]);
-
-  useEffect(() => {
-    const run = async () => {
-      const ok = await checkDbStatus();
-      setDbStatus(ok ? 'connected' : 'disconnected');
-    };
-    run();
-    const interval = setInterval(run, 15_000);
-    return () => clearInterval(interval);
+    setLookups({
+      cars: ['KS9'],
+      drivers: ['Emil'],
+      eventTypes: ['Skidpad', 'Autocross', 'Brake Test'],
+      locations: ['Lot North', 'Track East', 'Pad South'],
+      tags: ['baseline', 'tuning', 'suspension', 'brakes', 'comparison'],
+      channels: ['/imu/data', '/gps/fix', '/can/speed', '/wheel_speed/fl', '/can/brake_pressure'],
+    });
+    setDbStatus('connected');
+    setExportJobs([]);
   }, []);
 
   // ── Poll processing IDs ──
@@ -354,14 +403,6 @@ function McapDashboard() {
     }
   };
 
-  if (!authReady) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-sm" style={{ color: 'var(--sienna)' }}>Checking session…</p>
-      </div>
-    );
-  }
-
   // ══════════════════════════════
   //  RENDER
   // ══════════════════════════════
@@ -424,11 +465,8 @@ function McapDashboard() {
           <button
             className="skeuo-btn-ghost"
             onClick={async () => {
-              try {
-                await logoutSession();
-              } finally {
-                router.replace('/login');
-              }
+              await logoutSession();
+              showToast('Signed out');
             }}
           >
             Sign out
