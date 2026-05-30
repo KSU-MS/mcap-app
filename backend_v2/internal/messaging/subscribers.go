@@ -52,8 +52,11 @@ func PrintMessages(id int, subscriberName string, ch <-chan SubscribedMessage, r
 }
 
 func PlotLatLon(id int, subscriberName string, ch <-chan SubscribedMessage, results chan<- SubscriberResult) {
-	lats := make([]float32, 0)
-	lons := make([]float32, 0)
+	xs := make([]float64, 0)
+	ys := make([]float64, 0)
+	first := true
+	var originLat, originLon float64
+	minX, maxX, minY, maxY := math.MaxFloat64, -math.MaxFloat64, math.MaxFloat64, -math.MaxFloat64
 
 	for msg := range ch {
 		if msg.GetContent().Topic == EOF {
@@ -85,12 +88,28 @@ func PlotLatLon(id int, subscriberName string, ch <-chan SubscribedMessage, resu
 			continue
 		}
 
-		lats = append(lats, lat)
-		lons = append(lons, lon)
+		lat64 := float64(lat)
+		lon64 := float64(lon)
+
+		if first {
+			originLat = lat64
+			originLon = lon64
+			first = false
+		}
+
+		x, y := subscribers.LatLonToCartesian(lat64, lon64, originLat, originLon)
+
+		minX = math.Min(minX, x)
+		maxX = math.Max(maxX, x)
+		minY = math.Min(minY, y)
+		maxY = math.Max(maxY, y)
+
+		xs = append(xs, x)
+		ys = append(ys, y)
 
 	}
 
-	writerTo, err := subscribers.GenerateGPSPathImage(lats, lons)
+	writerTo, err := subscribers.GenerateGonumPlot(&xs, &ys, minX, maxX, minY, maxY)
 	if err != nil {
 		log.Println(err)
 		return

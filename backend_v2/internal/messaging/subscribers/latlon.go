@@ -3,64 +3,57 @@ package subscribers
 import (
 	"fmt"
 	"io"
+	"math"
 
+	"go-hep.org/x/hep/hplot"
 	"gonum.org/v1/plot"
-	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/plotutil"
 	"gonum.org/v1/plot/vg"
 )
 
-// GenerateGPSPathImage creates a line image of the GPS path.
-func GenerateGPSPathImage(lats, lons []float32) (*io.WriterTo, error) {
+const earthRadius = 6371000 // Earth's radius in meters
+
+// LatLonToCartesian converts latitude and longtidue coordinates to a flat 2D LatLonToCartesian plane
+func LatLonToCartesian(lat, lon, originLat, originLon float64) (float64, float64) {
+	// Convert degrees to radians
+	lat *= math.Pi / 180
+	lon *= math.Pi / 180
+	originLat *= math.Pi / 180
+	originLon *= math.Pi / 180
+
+	// Calculate differences
+	dLat := lat - originLat
+	dLon := lon - originLon
+
+	// Calculate x and y
+	x := earthRadius * dLon * math.Cos(originLat)
+	y := earthRadius * dLat
+
+	return x, y
+}
+
+// GenerateGonumPlot takes in x and y coordinates as well as the bounds of the plot
+// in the form of mins and maxs of the X and Y components.
+// If successful, it returns a writer to the Gonum plot
+func GenerateGonumPlot(xs, ys *[]float64, minX, maxX, minY, maxY float64) (*io.WriterTo, error) {
 	p := plot.New()
-	p.Title.Text = "GPS Path"
-	p.X.Label.Text = "longitude"
-	p.Y.Label.Text = "latitude"
+	p.Title.Text = "VN Position Data"
+	p.X.Label.Text = "x"
+	p.Y.Label.Text = "y"
 	p.HideAxes()
 
-	if len(lats) != len(lons) {
-		return nil, fmt.Errorf("lat/lon length mismatch")
-	}
-	if len(lats) == 0 {
-		writer, err := p.WriterTo(25*vg.Centimeter, 25*vg.Centimeter, "png")
-		if err != nil {
-			return nil, fmt.Errorf("could not get plot writer: %+v", err)
-		}
-		return &writer, nil
-	}
+	// Need to set the max/min for each axis of the plot or else the plot will be stretched.
+	min_value := math.Min(minX, minY)
+	max_value := math.Max(maxX, maxY)
+	p.X.Min = min_value
+	p.Y.Min = min_value
+	p.X.Max = max_value
+	p.Y.Max = max_value
 
-	pts := make(plotter.XYs, len(lats))
-
-	minX, maxX := float64(lons[0]), float64(lons[0])
-	minY, maxY := float64(lats[0]), float64(lats[0])
-	for i := range lats {
-		xf := float64(lons[i])
-		yf := float64(lats[i])
-		pts[i].X = xf
-		pts[i].Y = yf
-		if xf < minX {
-			minX = xf
-		}
-		if xf > maxX {
-			maxX = xf
-		}
-		if yf < minY {
-			minY = yf
-		}
-		if yf > maxY {
-			maxY = yf
-		}
-	}
-
-	p.X.Min = minX
-	p.Y.Min = minY
-	p.X.Max = maxX
-	p.Y.Max = maxY
-
-	line, err := plotter.NewLine(pts)
+	err := plotutil.AddScatters(p, "VN Position Data", hplot.ZipXY(*xs, *ys))
 	if err != nil {
-		return nil, fmt.Errorf("could not create line plot: %+v", err)
+		return nil, fmt.Errorf("could not create scatters: %+v", err)
 	}
-	p.Add(line)
 
 	writer, err := p.WriterTo(25*vg.Centimeter, 25*vg.Centimeter, "png")
 	if err != nil {
