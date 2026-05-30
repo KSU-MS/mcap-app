@@ -20,6 +20,7 @@ backend/media/
 media/
 data/media/
 *.mcap
+.opencode/
 
 # Frontend (Next.js) artifacts
 frontend/node_modules/
