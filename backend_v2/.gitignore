@@ -1,0 +1,8 @@
+.env
+*.png
+*.mat
+uploads/
+htmls/
+logs/
+files/
+
