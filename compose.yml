@@ -1,4 +1,23 @@
 services:
+  cloud_webserver_v2:
+    container_name: cloud_webserver_v2
+    build:
+      context: ./backend_v2
+    env_file:
+      - ./backend_v2/cmd/cloud_webserver_v2/.env
+    environment:
+      MONGODB_URI: mongodb://admin:password@mongodb:27017/?authSource=admin
+    depends_on:
+      - mongodb
+    volumes:
+      - matlab_mps_data:/mps_data
+      - run_metadata:/data/run_metadata
+      - cloud_webserver_v2_files:/app/files
+      - cloud_webserver_v2_logs:/app/logs
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
   mongodb:
     image: mongo:7
     container_name: mongodb
@@ -39,5 +58,9 @@ services:
       "
 
 volumes:
+  cloud_webserver_v2_files:
+  cloud_webserver_v2_logs:
+  run_metadata:
+  matlab_mps_data:
   mongodb_data:
   minio_data:
