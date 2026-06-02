@@ -41,7 +41,7 @@ import (
 var buzz string
 
 func main() {
-	println(buzz)
+	//println(buzz)
 
 	// Initialize Crash Logger Globally
 	logging.InitLogger(50)
