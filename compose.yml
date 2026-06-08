@@ -14,10 +14,7 @@ services:
       - run_metadata:/data/run_metadata
       - cloud_webserver_v2_files:/app/files
       - cloud_webserver_v2_logs:/app/logs
-    expose:
-      - "8080"
-    networks:
-      - query-shared
+    network_mode: host
     restart: unless-stopped
 
   mongodb:
@@ -28,6 +25,8 @@ services:
       - ./backend_v2/cmd/cloud_webserver_v2/.env
     volumes:
       - mongodb_data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
     networks:
       - query-shared
 
