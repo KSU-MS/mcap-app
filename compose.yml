@@ -32,7 +32,6 @@ services:
       - "127.0.0.1:27017:27017"
     networks:
       - query-shared
-    restart: unless-stopped
 
   minio:
     image: quay.io/minio/minio:latest
@@ -48,7 +47,6 @@ services:
       - "100.64.0.7:9001:9001"
     networks:
       - query-shared
-    restart: unless-stopped
 
   minio-create-bucket:
     image: quay.io/minio/mc:latest
