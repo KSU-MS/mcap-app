@@ -14,7 +14,10 @@ services:
       - run_metadata:/data/run_metadata
       - cloud_webserver_v2_files:/app/files
       - cloud_webserver_v2_logs:/app/logs
-    network_mode: host
+    ports:
+      - "100.64.0.7:8080:8080"
+    networks:
+      - query-shared
     restart: unless-stopped
 
   mongodb:
@@ -29,6 +32,7 @@ services:
       - "127.0.0.1:27017:27017"
     networks:
       - query-shared
+    restart: unless-stopped
 
   minio:
     image: quay.io/minio/minio:latest
@@ -39,8 +43,12 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
+    ports:
+      - "100.64.0.7:9000:9000"
+      - "100.64.0.7:9001:9001"
     networks:
       - query-shared
+    restart: unless-stopped
 
   minio-create-bucket:
     image: quay.io/minio/mc:latest
